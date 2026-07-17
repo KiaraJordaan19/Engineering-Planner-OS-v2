@@ -3,3 +3,8 @@
 node_modules/
 *.log
 *_Backup_*
+.clasp.json
+.DS_Store
+node_modules/
+*.log
+*_Backup_*
