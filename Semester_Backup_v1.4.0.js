@@ -181,6 +181,11 @@ function semVerifyBackup_(backupId) {
   try { file = DriveApp.getFileById(row['Drive File ID']); } catch (e) {
     return failure('Drive file not found: ' + e.message, false, false);
   }
+  try {
+    if (file.isTrashed()) return failure('Backup Drive file is trashed and unavailable.', false, false);
+  } catch (e) {
+    return failure('Backup Drive file availability could not be confirmed: ' + e.message, false, false);
+  }
   var parsed;
   try { parsed = JSON.parse(file.getBlob().getDataAsString()); } catch (e) {
     return failure('Backup file is not valid JSON: ' + e.message, true, false);

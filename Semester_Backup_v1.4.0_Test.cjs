@@ -12,7 +12,10 @@ const vm = require('vm');
 const source = fs.readFileSync(__dirname + '/Semester_Backup_v1.4.0.js', 'utf8');
 
 function makeContext() {
-  const state = { rows: [], files: {}, createFileCalls: 0, trashed: false };
+  const state = {
+    rows: [], files: {}, createFileCalls: 0, trashed: false,
+    fileTrashed: false, trashInspectionError: null
+  };
   const active = {
     getId: () => 'sheet-123',
     getName: () => 'Planner',
@@ -33,7 +36,13 @@ function makeContext() {
     DriveApp: {
       getFileById(id) {
         if (!state.files[id]) throw new Error('missing');
-        return { getBlob: () => ({ getDataAsString: () => state.files[id] }) };
+        return {
+          isTrashed: () => {
+            if (state.trashInspectionError) throw state.trashInspectionError;
+            return state.fileTrashed;
+          },
+          getBlob: () => ({ getDataAsString: () => state.files[id] })
+        };
       },
       getFoldersByName() {
         return { hasNext: () => true, next: () => context.__folder };
@@ -175,6 +184,26 @@ test('reports missing files and invalid JSON', () => {
   const result = invalid.context.semVerifyBackup_('BKP-001');
   assert.strictEqual(result.fileFound, true);
   assert.strictEqual(result.jsonValid, false);
+});
+
+test('rejects a retrievable file that is in trash', () => {
+  const env = makeContext();
+  validFixture(env);
+  env.state.fileTrashed = true;
+  const result = env.context.semVerifyBackup_('BKP-001');
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.fileFound, false);
+  assert.match(result.reason, /trashed and unavailable/);
+});
+
+test('fails closed when file trash state cannot be inspected', () => {
+  const env = makeContext();
+  validFixture(env);
+  env.state.trashInspectionError = new Error('trash state unavailable');
+  const result = env.context.semVerifyBackup_('BKP-001');
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.fileFound, false);
+  assert.match(result.reason, /availability could not be confirmed: trash state unavailable/);
 });
 
 test('does not create a Drive file when the backup index is absent', () => {
