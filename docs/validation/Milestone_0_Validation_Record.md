@@ -6,25 +6,34 @@
 |---|---|
 | Project | Engineering Planner OS v1.5.0 |
 | Milestone | Milestone 0 — Semester Backup Recovery and Hardening |
-| Validation status | GATE B NOT EXECUTABLE — VALIDATION HARNESS INCOMPLETE (`ENV-04`) |
-| Tested commit | `66abd493bbec9517411091dc2d6d0be8cb336948` |
+| Validation status | COMPLETE — GATE A PASS; GATE B PASS; M0-LV-15 PASS |
+| Tested repository baseline | `b592ce09cd8eb71dc18f1441bc7f10ebc08db9f8` plus reviewed validation-only harness SHA-256 `7bfc78a6ae1cd20327aa675ce30330dd01104c50ba048ce10d69d79a649fd6a3` |
 | Branch | `feature/v1.5.0-assessment-engine` |
-| Tester | Codex — disposable-environment Gate A execution |
+| Tester | Codex — disposable-environment Milestone 0 execution |
 | Validation date | 2026-07-17 to 2026-07-18 |
 | Disposable workbook identifier | `14sK…LBco` — `EPOS v1.5.0 — M0 DISPOSABLE VALIDATION — DO NOT USE` |
 | Apps Script project identifier | `1rGb…F0e9` — newly bound disposable project |
-| Apps Script version or deployment identifier | Disposable bound source with M0-LV-05 remediation; `Semester_Backup_v1.4.0.js` SHA-256 `edf4b9ed06c2cc1594055479f100cd013380b32cba073d4b2e1eeb8257ab17b2`; no deployment created |
+| Apps Script version or deployment identifier | Disposable bound source with M0-LV-05 remediation; `Semester_Backup_v1.4.0.js` SHA-256 `edf4b9ed06c2cc1594055479f100cd013380b32cba073d4b2e1eeb8257ab17b2`; final validation harness SHA-256 `7bfc78a6ae1cd20327aa675ce30330dd01104c50ba048ce10d69d79a649fd6a3`; no deployment created |
 | Google account used | `kiara…@gmail.com` — full address intentionally withheld from the repository |
-| Test environment statement | Disposable Drive folder `EPOS Disposable Validation — Milestone 0` (`1Anv…s-mn`), workbook, and bound Apps Script project were newly created at 2026-07-17T22:18:03+02:00. The project is named `EPOS v1.5.0 M0 Disposable Validation`. The artificial fixture contains the 19 backed-up planner sheets plus infrastructure sheets `24 Semester Backups` and `26 Semester History`. Calendar access is hard-disabled, the project has zero triggers, and no deployment was created. M0-LV-01 through M0-LV-10 passed. M0-LV-05 passed after the recorded implementation and validation-harness remediations. Gate B preflight passed, but M0-LV-11 through M0-LV-14 were not executable because the validation harness is incomplete. Production resources were not opened or modified. |
-| Production untouched | Confirmed for Gate A; final confirmation Pending |
-| Cleanup completed | Pending |
-| Final Milestone 0 decision | PENDING |
+| Test environment statement | Disposable Drive folder `EPOS Disposable Validation — Milestone 0` (`1Anv…s-mn`), workbook, and bound Apps Script project were created for this validation. The project is named `EPOS v1.5.0 M0 Disposable Validation`. The artificial fixture contains the 19 backed-up planner sheets plus infrastructure sheets `24 Semester Backups` and `26 Semester History`. Calendar access remained hard-disabled, no trigger or deployment was created, all 15 Blocking tests passed, and production resources were not opened or modified. |
+| Production untouched | Confirmed for all Milestone 0 validation |
+| Cleanup completed | Complete for executed validation; retained evidence artefacts remain under approved disposition pending release-checkpoint review |
+| Final Milestone 0 decision | PASS — VALIDATION COMPLETE |
+
+## Milestone validation summary
+
+| Gate | Tests | Result |
+|---|---|---|
+| Gate A — Backup integrity | M0-LV-01 through M0-LV-10 | PASS |
+| Gate B — Destructive workflow safeguards | M0-LV-11 through M0-LV-14 | PASS |
+| Recovery drill | M0-LV-15 | PASS |
+| Overall Milestone 0 validation | M0-LV-01 through M0-LV-15 | COMPLETE |
 
 ## Principal validation table
 
 | Test ID | Test | Classification | Expected result | Actual result | Status | Evidence | Notes |
 |---|---|---|---|---|---|---|---|
-| M0-LV-01 | Backup creation | Blocking | A backup is created only when all 19 required sheets are present and structurally valid. One JSON Drive file and one matching `24 Semester Backups` metadata row are created with the same backup ID, file ID, semester ID, planner version, sheet set, and fingerprint metadata. | Created control backup `BKP-03a3…31a7a`, Drive file `1Nvm…a_SV`, and metadata row 5. Payload and index both contained 19 sheets; format, semester, planner version, and fingerprint metadata matched. | Pass | Apps Script execution 2026-07-17 22:48:07–22:48:19 SAST; sanitized artefact details are in section 4. | Control backup retained for later authorized gates; final cleanup remains Pending. |
+| M0-LV-01 | Backup creation | Blocking | A backup is created only when all 19 required sheets are present and structurally valid. One JSON Drive file and one matching `24 Semester Backups` metadata row are created with the same backup ID, file ID, semester ID, planner version, sheet set, and fingerprint metadata. | Created control backup `BKP-03a3…31a7a`, Drive file `1Nvm…a_SV`, and metadata row 5. Payload and index both contained 19 sheets; format, semester, planner version, and fingerprint metadata matched. | Pass | Apps Script execution 2026-07-17 22:48:07–22:48:19 SAST; sanitized artefact details are in section 4. | Control backup remains under approved evidence retention pending release-checkpoint review. |
 | M0-LV-02 | Valid backup verification | Blocking | Verification of the untouched M0-LV-01 backup returns `ok: true`, `fileFound: true`, `jsonValid: true`, an empty `missingSheets` array, and `checksumValid: true`. | Returned `{"ok":true,"fileFound":true,"jsonValid":true,"missingSheets":[],"checksumValid":true}` for `BKP-03a3…31a7a`. | Pass | Apps Script execution 2026-07-17 22:48:31–22:48:33 SAST. | No additional artefact created; control backup retained. |
 | M0-LV-03 | Malformed JSON detection | Blocking | Verification of a controlled test copy whose content is not valid JSON returns `ok: false`, `fileFound: true`, `jsonValid: false`, and a reason identifying invalid JSON. No destructive workflow is authorized. | Content was replaced with `{not valid JSON`. Verification returned `ok:false`, `fileFound:true`, `jsonValid:false`, and identified invalid JSON at position 1. | Pass | Artefact `M0-GA-03-855f…76d3`, file `1zPk…1OV_`, temporary row 6; execution 2026-07-17 22:48:43–22:48:48 SAST. | Cleanup succeeded: file trashed and temporary metadata removed; control unchanged. |
 | M0-LV-04 | Altered JSON detection | Blocking | Verification of structurally valid JSON altered after fingerprinting returns `ok: false` with a fingerprint-mismatch reason. No destructive workflow is authorized. | `spreadsheetName` was changed by appending `— ALTERED`; independent metadata retained fingerprint `bfa363a5634f7bcca0c1f0cb15e6a66e88cd7c5d851d56692323041965bcf216`. Verification returned the expected fingerprint-mismatch reason. | Pass | Artefact `M0-GA-04-e144…888f`, file `1qTr…8QXe`, temporary row 6; execution 2026-07-17 22:49:00–22:49:06 SAST. | Cleanup succeeded: file trashed and temporary metadata removed. |
@@ -34,11 +43,11 @@
 | M0-LV-08 | Missing required sheet detection | Blocking | Backup creation fails before creating a Drive file when any mandatory sheet is absent. Verification of a crafted payload or index omitting a mandatory sheet returns `ok: false` and identifies a required-boundary mismatch; no destructive workflow is authorized. | With `03 Modules` temporarily absent, creation failed with `Backup was not created because required sheets are missing or empty: 03 Modules`; Drive and metadata counts remained 1. A crafted payload omitting that sheet returned `ok:false`, listed `03 Modules` in `missingSheets`, and identified the required-boundary mismatch. | Pass | Crafted file `19c1…bnoI`, temporary metadata row 6; execution 2026-07-18 00:04:04–00:04:29 SAST, duration 23,570 ms. | Crafted artefacts cleaned successfully; original `03 Modules` fixture restored. |
 | M0-LV-09 | Empty required sheet detection | Blocking | A required sheet with no used cells causes backup creation to fail before Drive-file creation. A crafted backup containing an empty `values` array returns `ok: false`, identifies the affected sheet, and cannot authorize destructive work. | With an empty replacement `04 Module Rules`, creation failed with `Backup was not created because required sheets are missing or empty: 04 Module Rules`; Drive and metadata counts remained 1. A crafted payload with an empty `values` array returned `ok:false`, listed `04 Module Rules` in `missingSheets`, and identified an empty or structurally invalid sheet dump. | Pass | Crafted file `1_Ax…tFdb`, temporary metadata row 6; execution 2026-07-18 00:04:45–00:05:02 SAST, duration 15,565 ms. | Crafted artefacts cleaned successfully; original `04 Module Rules` fixture restored. |
 | M0-LV-10 | Legacy backup rejection | Blocking | A valid legacy-format backup without `EPOS_BACKUP_FORMAT_2` SHA-256 metadata remains listable but verification returns `ok: false` with the legacy-or-malformed-fingerprint reason. It cannot authorize destructive work. | Legacy artefact `M0-GA-10-4a1b…eb6b` was listable. Verification returned `ok:false`, `fileFound:true`, `jsonValid:true`, and reason `Legacy or malformed backup metadata has no verifiable SHA-256 fingerprint.` | Pass | File `1hvN…NzuZ`, temporary metadata row 6; execution 2026-07-18 00:05:20–00:05:27 SAST, duration 5,777 ms. | Cleanup succeeded: legacy file trashed and temporary metadata removed. |
-| M0-LV-11 | Normal delete gate rejects invalid backup | Blocking | The normal delete workflow refuses confirmation when its associated backup fails verification. No active semester data or Calendar event is cleared, and the workflow is not consumed as successfully completed. | Not executed. Gate B preflight found that the approved disposable validation runner exposes no M0-LV-11 through M0-LV-14 entry points. Implementation behavior remains unknown and untested. | Not executable | Preflight execution and function-manifest inspection recorded under `ENV-04`; no workflow token or destructive call was created. | No cleanup required; fixture and control artefacts were left unchanged. |
-| M0-LV-12 | Normal delete gate accepts valid backup | Blocking | In the disposable environment, the normal delete workflow accepts an unexpired prepared workflow with a valid verified backup and archive only after the exact confirmation phrase. It clears exactly the documented active-sheet targets and consumes the workflow token once. | Not executed because Gate B stopped before M0-LV-11. | Pending | No execution evidence. | No mutation or artefact created. |
-| M0-LV-13 | Emergency-reset gate rejects invalid backup | Blocking | Emergency reset does not clear active data when fresh backup creation or verification fails. The response identifies the failure and before/after fixture comparison shows no destructive change. | Not executed because Gate B stopped before M0-LV-11. | Pending | No execution evidence. | No mutation or artefact created. |
-| M0-LV-14 | Emergency-reset gate accepts valid backup | Blocking | In the disposable environment, emergency reset proceeds only after the exact emergency confirmation phrase and successful creation and verification of a fresh backup. It clears exactly the documented active-sheet targets and returns the emergency backup ID. | Not executed because Gate B stopped before M0-LV-11. | Pending | No execution evidence. | No mutation or artefact created. |
-| M0-LV-15 | Recovery drill | Blocking | Values from at least one selected sheet are manually restored from the verified backup into the disposable workbook and match the recorded original fixture exactly for dimensions, row order, column order, types, blanks, zeroes, booleans, text, numbers, and serialized dates within the documented value-only scope. |  | Pending | Record the source backup and sheet, pre-reset fixture comparison record, restored range, automated or manual comparison output, mismatch count, and screenshots or sanitized logs. | Cleanup: dispose of the restored workbook and all related test files only after evidence and owner review requirements are satisfied. |
+| M0-LV-11 | Normal delete gate rejects invalid backup | Blocking | The normal delete workflow refuses confirmation when its associated backup fails verification. No active semester data or Calendar event is cleared, and the workflow is not consumed as successfully completed. | After the historical `ENV-04` harness blocker and narrowly remediated cleanup defects, a fresh workflow used `reused:false`, its backup verified before controlled trash corruption, confirmation returned the exact unavailable-backup rejection, the workflow remained `PREPARED`, and no destructive business mutation occurred. | Pass | Controlled disposable execution; exact response, workflow state, Automation Log delta, and identity-based cleanup evidence retained in the execution record. | Historical failed cleanup attempts remain recorded; final retest cleanup succeeded and unrelated state was preserved. |
+| M0-LV-12 | Normal delete gate accepts valid backup | Blocking | In the disposable environment, the normal delete workflow accepts an unexpired prepared workflow with a valid verified backup and archive only after the exact confirmation phrase. It clears exactly the documented active-sheet targets and consumes the workflow token once. | A fresh workflow and verified backup authorized normal deletion. The token became `CONSUMED`, stage became `RESET_COMPLETE`, and exactly the documented ten-sheet boundary was cleared with Calendar deletion disabled. | Pass | Controlled disposable execution; persisted lifecycle state, cleared-sheet set, Calendar-disabled result, fixture comparison, and cleanup evidence retained outside sanitized repository text. | Initial cleanup was incomplete because of stale fixture/schema state; the obsolete test state was abandoned under authorization, the canonical fixture was restored, and the fresh retest passed. |
+| M0-LV-13 | Emergency-reset gate rejects invalid backup | Blocking | Emergency reset does not clear active data when fresh backup creation or verification fails. The response identifies the failure and before/after fixture comparison shows no destructive change. | With required sheet `03 Modules` made unavailable through the approved deterministic fault, backup creation failed before metadata or destructive mutation. The sheet and complete fixture were restored. | Pass | Controlled disposable execution; failure response, Drive/index counts, business-sheet comparisons, expected audit evidence, and cleanup result retained in the execution record. | No backup artefact or destructive mutation remained. |
+| M0-LV-14 | Emergency-reset gate accepts valid backup | Blocking | In the disposable environment, emergency reset proceeds only after the exact emergency confirmation phrase and successful creation and verification of a fresh backup. It clears exactly the documented active-sheet targets and returns the emergency backup ID. | Emergency reset created and verified a fresh backup, cleared exactly the documented ten-sheet boundary with Calendar deletion disabled, restored the reusable fixture, and retained the verified emergency backup for M0-LV-15. | Pass | Controlled disposable execution; response, sanitized backup linkage, verification, boundary comparisons, and cleanup evidence retained outside repository text. | Retained backup remains unmodified, untrashed, and verifiable pending release-checkpoint review. |
+| M0-LV-15 | Recovery drill | Blocking | Values from the selected sheet `03 Modules` are restored from the retained verified backup into the disposable workbook and match the recorded original fixture exactly for dimensions, row order, column order, types, blanks, zeroes, booleans, text, numbers, and conservatively reconstructed serialized dates within the documented value-only scope. | `m0RunRecoveryDrill15()` bound the uniquely newest retained M0-LV-14 metadata row to its exact Drive file, passed public verification, revalidated identity and fingerprint immediately before writing, cleared only row `HEADER_ROW + 1` across the 12 used `03 Modules` columns, and recovered the 5 × 12 matrix from backup-derived values with zero typed mismatches. | Pass | Runtime 20,269 ms. Baseline and recovered SHA-256 both `73180c7dfd6a6863ffc44b4e0bf3b422db9eee7a4d3bdbcf92c84d7f360b404a`; corrupted checksum differed. Full identifiers remain only in the controlled Apps Script execution result. | Non-target and Automation Log invariance passed; cleanup succeeded; retained backup remained unchanged and the disposable environment was reusable. This is validation evidence, not a production restore capability. |
 
 ## 1. Environment isolation declaration
 
@@ -107,7 +116,8 @@ Describe the comparison method used to establish the original value-level fixtur
 
 | Artefact ID | Test ID | Backup ID | Drive file ID | Metadata row/reference | Format | Fingerprint | Created at | Final disposition |
 |---|---|---|---|---|---|---|---|---|
-| `M0-CONTROL-01` | M0-LV-01 / M0-LV-02 | `BKP-03a3…31a7a` | `1Nvm…a_SV` | Row 5 | `EPOS_BACKUP_FORMAT_2` | `bfa363a5634f7bcca0c1f0cb15e6a66e88cd7c5d851d56692323041965bcf216` | 2026-07-17 22:48:08 SAST | Retained for later authorized gates; Pending |
+| `M0-CONTROL-01` | M0-LV-01 / M0-LV-02 | `BKP-03a3…31a7a` | `1Nvm…a_SV` | Row 5 | `EPOS_BACKUP_FORMAT_2` | `bfa363a5634f7bcca0c1f0cb15e6a66e88cd7c5d851d56692323041965bcf216` | 2026-07-17 22:48:08 SAST | Approved evidence retention pending release-checkpoint review |
+| `M0-GB-14-RECOVERY` | M0-LV-14 / M0-LV-15 | `BKP-864e…adb4` | `198Z…bceI` | Unique newest retained metadata row at execution | `EPOS_BACKUP_FORMAT_2` | `00ea10fe…5d7d` | 2026-07-18 11:04:31 SAST | Retained, unmodified, untrashed, and verifiable pending release-checkpoint review |
 
 ## 5. Corruption-test artefact register
 
@@ -130,29 +140,45 @@ Never corrupt the valid control backup. Create an isolated test copy for every c
 
 | Test ID | Workflow type | Backup ID | Verification status | Confirmation used | Calendar deletion enabled | Expected affected sheets | Actual affected sheets | Token/status outcome | Safety result |
 |---|---|---|---|---|---|---|---|---|---|
-| M0-LV-11 | Normal delete — rejection |  |  |  | No | None |  |  | Pending |
-| M0-LV-12 | Normal delete — acceptance |  |  |  | No | `08 Assignments`; `09 Assessments`; `12 Study Planner`; `21 Study Tasks`; `13 Revision Tracker`; `11 Marks Tracker`; `10 AF Components`; `19 Attendance`; `07 Academic Inbox`; `20 Automation Log` |  |  | Pending |
-| M0-LV-13 | Emergency reset — rejection |  |  |  | No | None |  |  | Pending |
-| M0-LV-14 | Emergency reset — acceptance |  |  |  | No | `08 Assignments`; `09 Assessments`; `12 Study Planner`; `21 Study Tasks`; `13 Revision Tracker`; `11 Marks Tracker`; `10 AF Components`; `19 Attendance`; `07 Academic Inbox`; `20 Automation Log` |  |  | Pending |
+| M0-LV-11 | Normal delete — rejection | Test-owned fresh workflow backup | Passed before corruption; failed after file was trashed | `DELETE SEMESTER` | No | None | None | Workflow remained `PREPARED`; no consumed timestamp; no `RESET_COMPLETE` | Pass |
+| M0-LV-12 | Normal delete — acceptance | Test-owned fresh workflow backup | Passed, including internal confirmation re-verification | `DELETE SEMESTER` | No | `08 Assignments`; `09 Assessments`; `12 Study Planner`; `21 Study Tasks`; `13 Revision Tracker`; `11 Marks Tracker`; `10 AF Components`; `19 Attendance`; `07 Academic Inbox`; `20 Automation Log` | Exact documented boundary | Token `CONSUMED`; stage `RESET_COMPLETE` | Pass |
+| M0-LV-13 | Emergency reset — rejection | None created | Backup creation rejected while required `03 Modules` was unavailable | `EMERGENCY RESET` | No | None | None | No workflow or destructive-success state created | Pass |
+| M0-LV-14 | Emergency reset — acceptance | `BKP-864e…adb4` | Passed and remained valid after fixture restoration | `EMERGENCY RESET` | No | `08 Assignments`; `09 Assessments`; `12 Study Planner`; `21 Study Tasks`; `13 Revision Tracker`; `11 Marks Tracker`; `10 AF Components`; `19 Attendance`; `07 Academic Inbox`; `20 Automation Log` | Exact documented boundary | Emergency backup retained for M0-LV-15 | Pass |
 
 ## 7. Recovery comparison
 
 | Field | Value |
 |---|---|
 | Test ID | M0-LV-15 |
-| Backup ID |  |
-| Drive file ID |  |
-| Restored sheet |  |
-| Original dimensions |  |
-| Restored dimensions |  |
-| Comparison method |  |
-| Cells compared |  |
-| Mismatch count |  |
-| Type mismatches |  |
-| Blank/zero/boolean checks |  |
-| Date serialization checks |  |
-| Comparison evidence |  |
-| Result | Pending |
+| Runner | `m0RunRecoveryDrill15()` |
+| Backup ID | `BKP-864e…adb4` — uniquely newest retained M0-LV-14 metadata row |
+| Drive file ID | `198Z…bceI` — exact metadata-bound file; full ID retained only in controlled execution evidence |
+| Binding contract | Metadata row → exact Drive file ID → `api_semVerifyBackup()` success → immediate identity and checksum revalidation before write |
+| Restored sheet | `03 Modules` only |
+| Controlled corruption | Cleared only `HEADER_ROW + 1` across all 12 used columns |
+| Original dimensions | 5 rows × 12 columns |
+| Restored dimensions | 5 rows × 12 columns |
+| Comparison method | SHA-256 plus cell-by-cell canonical typed-value comparison in fixed row and column order |
+| Baseline checksum | `73180c7dfd6a6863ffc44b4e0bf3b422db9eee7a4d3bdbcf92c84d7f360b404a` |
+| Corrupted checksum | `3a8fc8d0ceb2f3602e69f347b4064c52e08224171161785f11bc581e013c9fb9` |
+| Recovered checksum | `73180c7dfd6a6863ffc44b4e0bf3b422db9eee7a4d3bdbcf92c84d7f360b404a` |
+| Cells compared | 60 |
+| Mismatch count | 0 |
+| Typed comparison | PASS |
+| Blank/zero/boolean checks | PASS within selected fixture |
+| Date serialization checks | Conservative baseline-assisted reconstruction rule enforced; no Date-typed cell occurred in the selected `03 Modules` fixture |
+| Non-target invariance | PASS |
+| Automation Log invariance | PASS; no M0-LV-15 log delta permitted or observed |
+| Cleanup | `SUCCEEDED`; environment reusable |
+| Backup disposition | Retained, unmodified, untrashed, and verifiable pending release-checkpoint review |
+| Comparison evidence | Sanitized evidence in this record; complete identifiers and returned result retained in the controlled Apps Script execution result |
+| Result | PASS |
+
+### 7.1 Recovery claim boundary
+
+M0-LV-15 proves that the retained verified backup payload is usable for recovering the selected `03 Modules` value matrix in the disposable validation environment. It proves exact restoration of dimensions, row order, column order, canonical typed values, and checksum; preservation of non-target workbook state; and cleanup to a reusable disposable baseline.
+
+M0-LV-15 does **not** prove or provide a production restore API, automated whole-workbook recovery, formula or formatting restoration, Calendar recovery, Drive recovery, or production disaster recovery.
 
 ## 8. Runtime observations
 
@@ -171,6 +197,25 @@ Never corrupt the valid control backup. Create an isolated test copy for every c
 | `RUN-09` | M0-LV-09 | 2026-07-18 00:04:45 SAST | 15565 | Info | Empty-sheet creation failed without new artefacts; crafted payload was rejected; fixture restoration succeeded. | No |
 | `RUN-10` | M0-LV-10 | 2026-07-18 00:05:20 SAST | 5777 | Info | Legacy backup remained listable but could not pass integrity verification; cleanup succeeded. | No |
 | `RUN-B-PREFLIGHT` | Gate B preflight | 2026-07-18 00:20:14 SAST | Approximately 3000 | Harness blocker | Disposable identity and Drive-parent safety check passed with Calendar access `DISABLED` and production access `NONE`; project showed zero triggers and no active or archived deployments. Function-manifest inspection found no M0-LV-11 through M0-LV-14 runner entry points. | Separate owner review and authorization are required before adding validation-only Gate B runner functions. |
+| `RUN-B11` | M0-LV-11 | 2026-07-18 | Recorded in controlled execution result | Info | Final retest proved exact rejection, unchanged business data, `PREPARED` workflow state, and successful identity-based cleanup after historical harness remediation. | No |
+| `RUN-B12` | M0-LV-12 | 2026-07-18 | Recorded in controlled execution result | Info | Fresh retest proved internal re-verification, token consumption, exact destructive boundary, reusable fixture restoration, and successful cleanup. | No |
+| `RUN-B13` | M0-LV-13 | 2026-07-18 | Recorded in controlled execution result | Info | Deterministic missing-`03 Modules` fault prevented backup creation and all destructive mutation; cleanup restored the fixture. | No |
+| `RUN-B14` | M0-LV-14 | 2026-07-18 | Recorded in controlled execution result | Info | Emergency reset created and verified a fresh backup, exercised the exact boundary, restored the fixture, and retained the backup for recovery validation. | No |
+| `RUN-15` | M0-LV-15 | 2026-07-18 11:48:32 SAST | 20269 | Info | Backup-derived value recovery restored `03 Modules` from a distinct controlled corruption to the exact 5 × 12 typed baseline with zero mismatches. Non-target, Automation Log, retained-backup, and cleanup assertions passed. | No |
+
+### 8.1 Validation chronology
+
+| Sequence | Event | Outcome |
+|---:|---|---|
+| 1 | Gate A execution, M0-LV-05 implementation defect, runner-contract defect, approved remediations, and final retest | Gate A passed; `VAL-01` and `VAL-02` preserved |
+| 2 | Gate B preflight discovered missing runner entry points | Execution blocked as `ENV-04`; no production behavior was misclassified |
+| 3 | Callable-boundary assessment and Gate B runner specification | Existing production boundaries found sufficient; specification approved |
+| 4 | Gate B runner implementation review and narrow harness remediations | Schema, cleanup ownership, typed Settings compare-and-swap, and fixture-alignment defects resolved without production changes |
+| 5 | M0-LV-11 through M0-LV-14 final executions | Gate B passed; M0-LV-14 emergency backup retained |
+| 6 | Read-only recovery-boundary assessment | Confirmed no production restore API; selected-sheet validation-only path approved |
+| 7 | M0-LV-15 specification finalized and validation-only runner reviewed | `m0RunRecoveryDrill15()` approved for one execution |
+| 8 | Focused M0-LV-15 execution | PASS in 20,269 ms; zero mismatches; cleanup succeeded |
+| 9 | Final Validation Record review | Milestone 0 validation complete; release checkpoint remains separately authorized |
 
 Record Apps Script execution time, Drive latency, authorization prompts, quotas, warnings, unexpected logs, and any runtime behavior that differs from local mocks.
 
@@ -190,7 +235,11 @@ The current backup preserves cell values within each required sheet's used range
 
 Additional limitations or observations:
 
-- Recovery is a manual drill in Milestone 0; no automated restore workflow is authorized.
+- M0-LV-15 is a validation-only selected-sheet recovery drill, not an end-user or production restore workflow.
+- Recovery scope is value-only. Dates are serialized as ISO strings and are reconstructed conservatively only when the approved typed baseline proves the corresponding cell is a Date.
+- Formulas, formatting, conditional formatting, data validation, comments, notes, protections, merged cells, drawings, images, named ranges, filters, hidden rows, hidden columns, Calendar events, Drive state, workflow history, and templates remain outside the recovery claim.
+- Production recovery remains a future product decision; no production restore, rollback, or disaster-recovery API is implemented or implied.
+- Compatibility of retained backups across future schema or backup-format versions is not guaranteed.
 - A fingerprint detects content inconsistency against the independent metadata record but is not a cryptographic authenticity guarantee against an actor able to replace both records.
 - Legacy backups without the required format and fingerprint metadata cannot authorize destructive workflows.
 - Checksum metadata is temporarily stored in the existing `Notes` column pending a future versioned schema migration to a dedicated field.
@@ -208,41 +257,49 @@ Additional limitations or observations:
 | `CLEAN-08` | M0-LV-08 missing-sheet artefact and fixture mutation | Trash crafted file, remove temporary metadata, and restore `03 Modules` | Codex | Complete | 2026-07-18 00:04:29 SAST | Runner reported `SUCCEEDED`; fixture restoration confirmed |
 | `CLEAN-09` | M0-LV-09 empty-sheet artefact and fixture mutation | Trash crafted file, remove temporary metadata, and restore `04 Module Rules` | Codex | Complete | 2026-07-18 00:05:01 SAST | Runner reported `SUCCEEDED`; fixture restoration confirmed |
 | `CLEAN-10` | M0-LV-10 legacy artefact `M0-GA-10-4a1b…eb6b` | Trash legacy file and remove temporary metadata | Codex | Complete | 2026-07-18 00:05:26 SAST | Runner reported `SUCCEEDED`; metadata row 6 removed |
-| `CLEAN-CONTROL` | M0-LV-01 control backup | Retain through later authorized gates and recovery drill | Owner/Codex | Pending |  | Control file and metadata retained intentionally |
+| `CLEAN-B11` | M0-LV-11 final retest | Remove only test-owned workflow, backup metadata, archive/history/template rows and exact log suffix; restore owned Settings value | Codex | Complete | 2026-07-18 | Identity-based cleanup and Settings compare-and-swap succeeded; unrelated state preserved |
+| `CLEAN-B12` | M0-LV-12 final fresh retest | Restore ten-sheet fixture and remove only fresh test-owned lifecycle and audit artefacts | Codex | Complete | 2026-07-18 | Clean canonical baseline proven after stale-state abandonment; unrelated state preserved |
+| `CLEAN-B13` | M0-LV-13 deterministic fault | Restore exact `03 Modules` identity and fixture; remove only unexpected owned partial artefacts | Codex | Complete | 2026-07-18 | No backup or destructive mutation remained |
+| `CLEAN-B14` | M0-LV-14 emergency reset | Restore reusable fixture while retaining verified emergency backup | Codex | Complete | 2026-07-18 | Fixture restored; recovery backup intentionally retained |
+| `CLEAN-15` | M0-LV-15 controlled selected-sheet corruption | Restore `03 Modules` only from bound backup-derived values and prove reusable baseline | Codex | Complete | 2026-07-18 11:48:53 SAST | Runner returned `SUCCEEDED`; environment reusable; backup unchanged |
+| `CLEAN-CONTROL` | M0-LV-01 control backup | Retain through evidence and release-checkpoint review | Owner/Codex | Approved retention | 2026-07-18 | Retention is an evidence policy, not incomplete test cleanup |
+| `CLEAN-RECOVERY` | M0-LV-14/M0-LV-15 retained emergency backup | Retain unmodified, untrashed, and verifiable pending separate final-disposition authorization | Owner/Codex | Approved retention | 2026-07-18 | Required recovery evidence remains available |
 
 Cleanup completion checklist:
 
-- [ ] Corrupted and malformed Drive test files removed or trashed.
-- [ ] Valid backup test files disposed of after the recovery drill and owner review.
-- [ ] Disposable metadata and workflow rows removed or the entire disposable workbook disposed of.
-- [ ] Disposable Apps Script deployments and triggers removed where applicable.
-- [ ] Disposable workbook removed or archived according to owner instruction.
-- [ ] No test Calendar events were created or deleted.
-- [ ] Cleanup evidence recorded.
+- [x] Corrupted and malformed Drive test files removed or trashed under their recorded disposition.
+- [x] Valid evidence backups retained only under the approved evidence policy; final disposal requires separate authorization.
+- [x] Test-owned disposable metadata and workflow rows removed after their tests.
+- [x] No Apps Script deployment or trigger was created.
+- [x] Disposable workbook left in a verified reusable state pending separate final-disposition authorization.
+- [x] No test Calendar events were created or deleted.
+- [x] Cleanup evidence recorded.
 
-Cleanup completed by:  
-Cleanup completed at:  
-Overall cleanup status: Pending
+Cleanup completed by: Codex — controlled validation runners
+
+Cleanup completed at: 2026-07-18 11:48:53 SAST
+
+Overall cleanup status: Complete for Milestone 0 execution; approved evidence retention and disposable-environment disposition remain separate release-checkpoint actions
 
 ## 11. Production non-impact declaration
 
 Confirm after validation:
 
-- [x] Production workbook was not opened, read, or modified for Gate A validation.
+- [x] Production workbook was not opened, read, or modified for any Milestone 0 validation.
 - [x] Production Apps Script source, versions, deployments, properties, and triggers were not modified.
-- [x] Production Drive backup files and folders were not modified; Gate A first verified that its backup folder was a child of the disposable folder.
+- [x] Production Drive backup files and folders were not modified; validation first verified that its backup folder was a child of the disposable folder.
 - [x] Production Calendar and events were not accessed or modified.
-- [x] All Gate A mutations occurred only in the identified disposable environment.
+- [x] All Gate A, Gate B, and M0-LV-15 mutations occurred only in the identified disposable environment.
 
 Declaration:
 
-> Gate A execution was confined to disposable workbook `14sK…LBco`, disposable Apps Script project `1rGb…F0e9`, and a backup folder verified as a child of disposable folder `1Anv…s-mn`. No production resource was selected or changed.
+> Milestone 0 execution was confined to disposable workbook `14sK…LBco`, disposable Apps Script project `1rGb…F0e9`, and a backup folder verified as a child of disposable folder `1Anv…s-mn`. No production resource was selected or changed.
 
-Confirmed by: Codex — Gate A execution
+Confirmed by: Codex — Milestone 0 execution
 
 Date: 2026-07-18
 
-Status: Confirmed for Gate A; final Milestone 0 confirmation remains pending
+Status: Confirmed for complete Milestone 0 validation
 
 ## 12. Deviations and incidents
 
@@ -251,7 +308,11 @@ Status: Confirmed for Gate A; final Milestone 0 confirmation remains pending
 | ENV-01 | Environment preparation | Resolved specification/dependency conflict | The original fixture listed 19 planner sheets but `semCreateBackup_` also requires the `24 Semester Backups` index sheet through `SEM_BACKUPS_SHEET`. | The original 19-sheet fixture could not execute backup creation. | Preparation stopped before source transfer, fixture creation, or function execution. | Owner authorized `24 Semester Backups` as a twentieth infrastructure sheet. | Approved and resolved |
 | ENV-02 | Environment preparation | Resolved expanded-boundary dependency conflict | The owner-approved `Semester_Archive_v1.4.0.js` declares `SEM_HISTORY_SHEET = '26 Semester History'`, and `semCreateArchive_` always calls `semUpdateHistory_`, which throws when that sheet is absent. | The normal delete acceptance test could not complete safely in the previously authorized 20-sheet fixture. | Preparation stopped before Apps Script source transfer, fixture creation, or function execution. | Owner authorized `26 Semester History` as a twenty-first infrastructure sheet and replaced fixed-count doctrine with intent-based dependency inclusion. | Approved and resolved |
 | ENV-03 | Environment preparation | Resolved application/business dependency | `semReportBuild_`, which is mandatory for normal delete workflow preparation, directly calls `api_getPlannerData()` and `computeAcademicIntelligence_()`. Both are implemented in repository `API.js`, not in the original five-file boundary, and neither may be replaced by a validation stub. | Loading only the original five files would leave the normal delete workflow non-executable or substitute unauthorized business logic. | Completed the full static dependency pass and stopped until owner authorization was received. | Owner authorized `API.js` from the same approved feature-branch HEAD. Its uploaded SHA-256 matches the repository source. Calendar access remains hard-disabled in the separate validation support file. | Approved and resolved |
-| ENV-04 | Gate B preflight | Validation harness incomplete for Gate B | The disposable `Validation_Support.gs` function manifest contains fixture preparation, the safety check, and M0-LV-01 through M0-LV-10 only. It has no authorized callable entry points for M0-LV-11 through M0-LV-14. The Apps Script editor cannot supply the required workflow arguments directly. | Gate B is blocked and not executable. Production delete/reset behavior remains unknown because it was not exercised. This is not an implementation-test failure. | No destructive workflow was invoked. Calendar remained disabled; zero triggers and zero deployments were confirmed; the disposable fixture and control artefacts were preserved. | Unresolved. Validation-runner modification is explicitly outside the current authorization and requires a separately reviewed design and owner approval. | Pending owner decision |
+| ENV-04 | Gate B preflight | Historical validation-harness blocker | The original disposable `Validation_Support.gs` manifest had no M0-LV-11 through M0-LV-14 entry points. The Apps Script editor could not supply the production workflow arguments directly. | Gate B was correctly classified as not executable; production behavior remained unknown at that point. | No destructive workflow was invoked. Calendar remained disabled; zero triggers and deployments were confirmed; fixture and evidence were preserved. | Callable-boundary assessment found existing production APIs sufficient. An approved Gate B runner specification and reviewed validation-only runners resolved the blocker; all four tests later passed. | Approved and resolved; history retained |
+| HAR-01 | M0-LV-11 | Historical validation-harness schema and cleanup defects | Legacy archive/template headers and whole-sheet-style cleanup assumptions prevented reliable ownership interpretation during initial runner execution. | Production rejection behavior was correct, but cleanup could not be accepted. | Execution stopped; failure state was preserved; no later Gate B test ran. | Harness schemas were aligned with production persistence and cleanup was changed to composite identity-based deletion. Residual cleanup and the final M0-LV-11 retest passed. | Approved and resolved; history retained |
+| HAR-02 | M0-LV-11 / M0-LV-12 | Historical Settings ownership defect | Separate cleanup paths could not prove ownership of the test-written `Semester status` value. | Production workflow behavior passed, but final classification was `CLEANUP INCOMPLETE`. | The harness refused to overwrite ambiguous Settings state and stopped. | A shared typed compare-and-swap rule captured original and test-written values, required a unique exact label, and restored only when ownership matched. | Approved and resolved; history retained |
+| ENV-05 | M0-LV-12 | Historical disposable-fixture schema drift | The disposable fixture used legacy label `Semester manually finished` while the canonical schema required `Semester manually finished (TRUE/FALSE)`. | Residual cleanup could not uniquely identify the canonical Setting. | Exact matching failed closed; lookup rules were not weakened. | Canonical authority was confirmed, the disposable label was aligned without changing its Boolean value, obsolete test state was abandoned under authorization, and a fresh M0-LV-12 retest passed. | Approved and resolved; history retained |
+| ENV-06 | M0-LV-15 | Historical validation-runner absence | The repository and disposable harness exposed backup creation and verification but no production restore API or approved M0-LV-15 runner. | Recovery validation could not execute; production recovery was not implied. | A read-only recovery-boundary assessment stopped implementation and preserved the retained M0-LV-14 backup. | A selected-sheet, value-only specification was frozen; `m0RunRecoveryDrill15()` was reviewed and executed once successfully without changing production scope. | Approved and resolved; history retained |
 | VAL-01 | M0-LV-05 | Historical implementation defect | A file moved to trash with `file.setTrashed(true)` remained retrievable through `DriveApp.getFileById()`. The original `semVerifyBackup_()` did not inspect trash state. | Initial deleted/trashed-file detection failed and Gate A stopped. | The artefact remained in disposable trash, metadata was removed, and production remained untouched. | Owner-approved minimal remediation added an immediate fail-closed `file.isTrashed()` inspection. Local suite passed 14/14; disposable remote source checksum is `edf4b9ed06c2cc1594055479f100cd013380b32cba073d4b2e1eeb8257ab17b2`; final live retest passed. | Approved and resolved; history retained |
 | VAL-02 | M0-LV-05 first retest | Historical validation-harness defect | The first remediated live retest satisfied `ok:false` and `fileFound:false`, but the runner still required obsolete reason substring `Drive file not found` rather than the frozen precise trashed-file reason. | The runner reported failure despite substantive implementation compliance. No later tests ran. | Execution stopped; no production change followed. | Owner classified this as a harness defect. The validation-only assertion was changed to exact-match `Backup Drive file is trashed and unavailable.` The final retest passed. | Approved and resolved; history retained |
 
@@ -263,14 +324,14 @@ If there were no deviations or incidents, record `None` explicitly before final 
 
 | Assessment field | Value |
 |---|---|
-| Blocking tests passed | Gate A: M0-LV-01 through M0-LV-10 passed; Gate B not executable; M0-LV-11 through M0-LV-15 not executed |
-| Required evidence complete | Gate A evidence recorded; full milestone evidence incomplete |
-| Cleanup complete | Pending |
-| Production non-impact confirmed | Confirmed for Gate A; final confirmation Pending |
-| Unresolved deviations/incidents | `ENV-04` unresolved; historical `VAL-01` and `VAL-02` resolved and retained |
-| Final Milestone 0 decision | PENDING |
-| Decision rationale | All Gate A backup-integrity tests passed. Gate B environment preflight passed, but the validation harness is incomplete, so M0-LV-11 through M0-LV-14 could not execute. No implementation defect was discovered because no destructive workflow was exercised. Recovery testing remains not started. |
-| Assessed by | Codex — Gate A execution |
+| Blocking tests passed | 15/15: Gate A PASS; Gate B PASS; M0-LV-15 PASS |
+| Required evidence complete | Complete for all Blocking tests; full live identifiers remain in controlled execution evidence and repository evidence is sanitized |
+| Cleanup complete | Complete for validation execution; retained backups and disposable environment remain under approved evidence disposition |
+| Production non-impact confirmed | Confirmed for complete Milestone 0 validation |
+| Unresolved deviations/incidents | None blocking; historical `ENV-01` through `ENV-06`, `HAR-01`, `HAR-02`, `VAL-01`, and `VAL-02` resolved and retained |
+| Final Milestone 0 decision | PASS — VALIDATION COMPLETE |
+| Decision rationale | All 15 Blocking tests passed in the isolated disposable environment. Backup integrity, destructive-workflow safeguards, and selected-sheet value recovery were validated. M0-LV-15 recovered only `03 Modules` from the retained verified M0-LV-14 backup with exact dimensions, checksum, typed values, zero mismatches, non-target invariance, and successful cleanup. No production restore capability or whole-workbook recovery claim is made. |
+| Assessed by | Codex — Milestone 0 execution and documentation review |
 | Assessment date | 2026-07-18 |
 
 ## 14. Validation sign-off summary
@@ -279,28 +340,36 @@ Complete this summary only after the detailed record and all required evidence h
 
 | Sign-off field | Value |
 |---|---|
-| Blocking tests passed | 10/15 passed; 5 not completed |
-| Evidence package complete | Complete through Gate A; Gate B and recovery evidence Pending |
-| Deviations and incidents resolved or accepted | `VAL-01` and `VAL-02` resolved; `ENV-04` unresolved |
-| Cleanup verified complete | Pending |
-| Production non-impact verified | Confirmed for Gate A; final confirmation Pending |
-| Tester sign-off |  |
+| Blocking tests passed | 15/15 |
+| Evidence package complete | Complete; repository evidence sanitized and full live execution evidence retained separately |
+| Deviations and incidents resolved or accepted | All recorded incidents resolved; history preserved |
+| Cleanup verified complete | Complete for validation execution; approved evidence retention remains |
+| Production non-impact verified | Confirmed for complete Milestone 0 validation |
+| Tester sign-off | Codex — validation execution and final record review |
 | Independent reviewer sign-off |  |
-| Owner sign-off |  |
-| Final Milestone 0 decision | PENDING |
-| Sign-off date |  |
+| Owner sign-off | Finalization authorized by the owner instruction recorded for this update |
+| Final Milestone 0 decision | PASS — VALIDATION COMPLETE |
+| Sign-off date | 2026-07-18 |
 
 This summary is not a substitute for the evidence in the principal validation table and supporting registers. A `PASS` decision is valid only when the decision rule in section 13 is satisfied and owner approval is recorded in section 15.
+
+### 14.1 Release checkpoint governance
+
+- `validation/Validation_Support.gs` is part of the Milestone 0 audit trail and SHOULD be deliberately staged in the release checkpoint.
+- `docs/validation/M0-LV-15_Recovery_Drill_Runner_Specification.md` SHOULD be staged in the release checkpoint.
+- This Validation Record SHOULD be staged only after owner review of the final diff.
+- The validated runner is frozen for this checkpoint.
+- Release commit, push, tag, production deployment, retained-backup disposition, and iPad smoke testing remain separately authorized activities.
 
 ## 15. Owner approval
 
 | Field | Value |
 |---|---|
-| Owner name |  |
-| Decision | Pending |
-| Approved Milestone 0 result |  |
-| Conditions or follow-up actions |  |
-| Approval date |  |
-| Signature or recorded approval reference |  |
+| Owner name | Withheld from repository record |
+| Decision | Validation Record finalization authorized |
+| Approved Milestone 0 result | PASS — VALIDATION COMPLETE |
+| Conditions or follow-up actions | Release checkpoint review, commit, push, tag, deployment, and iPad smoke test require separate authorization |
+| Approval date | 2026-07-18 |
+| Signature or recorded approval reference | Owner authorization: `Milestone 0 — Finalize Validation Record After M0-LV-15 PASS` |
 
 Owner approval of this record does not authorize Milestone 1 unless that authorization is granted separately and explicitly.
