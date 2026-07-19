@@ -762,7 +762,31 @@ function toggleInboxProcessed(inboxId, current) {
 // message explicitly distinguishes the already-processed case, per the
 // requirement that deleting the capture must never be confused with
 // deleting whatever it was filed as.
-function deleteInboxItem(inboxId, title, processed, filedType) {
+// v1.4.0 -- when the item was already filed AND its filed record can still
+// be resolved (filedId), a genuine choice is offered instead of a single
+// confirm, mirroring the Workbook-only / Workbook+Calendar pattern already
+// used for Assignment/Assessment/Study-session delete: "Inbox entry only"
+// vs. also deleting the filed record (and its Calendar event, if any).
+// Fixes the Agenda panel appearing to "not update" after deleting a
+// smoke-test/duplicate Inbox item -- the filed Assignment/Assessment it
+// created was never actually gone, just the capture that filed it.
+function deleteInboxItem(inboxId, title, processed, filedType, filedId) {
+  if (processed && filedId) {
+    var filedList = filedType === 'Assessment' ? (state.raw && state.raw.assessments) : (state.raw && state.raw.assignments);
+    var filedRecord = (filedList || []).filter(function (r) { return r.id === filedId; })[0];
+    var hasCalendarEvent = !!(filedRecord && filedRecord.calendarEventId);
+    var choices = [
+      { label: 'Inbox entry only', action: 'doDeleteInboxItem', args: [inboxId] },
+      { label: 'Inbox entry + filed ' + filedType, action: 'doDeleteInboxItemAndFiled', args: [inboxId, filedType, filedId, false], primary: !hasCalendarEvent }
+    ];
+    if (hasCalendarEvent) {
+      choices.push({ label: 'Inbox entry + filed ' + filedType + ' + Calendar event', action: 'doDeleteInboxItemAndFiled', args: [inboxId, filedType, filedId, true], primary: true });
+    }
+    openChoiceModal('Delete "' + title + '"?',
+      'This was already filed as ' + (filedType === 'Assessment' ? 'an Assessment' : 'an Assignment') + '. Choose what to delete:',
+      choices);
+    return;
+  }
   var msg = processed
     ? 'Delete the Inbox capture "' + title + '"? This only removes the Inbox entry itself — the ' +
       (filedType || 'Assignment or Assessment') + ' it was already filed as is NOT deleted.'
@@ -777,6 +801,22 @@ function doDeleteInboxItem(inboxId) {
     state.saving[key] = false;
     if (res.ok) {
       showToast_('success', 'Inbox item deleted.');
+      loadPlannerData();
+    } else {
+      showToast_('error', 'Could not delete: ' + res.error);
+      render();
+    }
+  });
+}
+function doDeleteInboxItemAndFiled(inboxId, filedType, filedId, deleteCalendarEvent) {
+  var key = 'inboxDelete_' + inboxId;
+  if (state.saving[key]) return; // double-submit guard
+  state.saving[key] = true; render();
+  runScript_('api_deleteInboxItemAndFiled', [inboxId, filedType, filedId, !!deleteCalendarEvent]).then(function (res) {
+    state.saving[key] = false;
+    if (res.ok) {
+      var calNote = (res.data.filed && res.data.filed.calendarResult === 'Deleted') ? ' — Calendar event removed too.' : '.';
+      showToast_('success', 'Inbox item and filed ' + filedType + ' deleted' + calNote);
       loadPlannerData();
     } else {
       showToast_('error', 'Could not delete: ' + res.error);
@@ -1527,7 +1567,7 @@ function computeViewModel() {
     }
     return {
       id: it.id, title: it.title, module: it.module, type: it.type, due: it.dueDate || 'TBC', processed: it.processed,
-      filedType: it.filedType || '',
+      filedType: it.filedType || '', filedId: it.filedId || '',
       strike: it.processed ? 'text-decoration:line-through;color:#8A7A68;' : '',
       statusLabel: statusLabel, statusBg: statusBg, statusColor: statusColor
     };
@@ -2316,7 +2356,7 @@ function screenInbox_(vm) {
       '<div style="flex:1;"><div style="font-weight:700;font-size:14.5px;' + it.strike + '">' + esc(it.title) + '</div>' +
       '<div style="font-size:12.5px;color:#8A7A68;">' + esc(it.module) + ' · ' + esc(it.type) + ' · due ' + esc(it.due) + '</div></div>' +
       '<div style="font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px;background:' + it.statusBg + ';color:' + it.statusColor + ';">' + esc(it.statusLabel) + '</div>' +
-      '<div class="ep-clickable" onclick="' + h_('deleteInboxItem', [it.id, it.title, it.processed, it.filedType]) + '" style="font-size:11.5px;font-weight:700;color:#8F3B23;cursor:pointer;padding:6px 10px;">Delete</div></div>';
+      '<div class="ep-clickable" onclick="' + h_('deleteInboxItem', [it.id, it.title, it.processed, it.filedType, it.filedId]) + '" style="font-size:11.5px;font-weight:700;color:#8F3B23;cursor:pointer;padding:6px 10px;">Delete</div></div>';
   }).join('') : '<div style="font-size:13px;color:#8A7A68;">Nothing captured yet.</div>';
 
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Academic Inbox</div>' +

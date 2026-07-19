@@ -480,14 +480,16 @@ function api_getPlannerData() {
       // not a new column) so the frontend can show "Filed as Assignment/Assessment"
       // accurately even after a full page reload, without guessing.
       var processedInto = r["Processed into (sheet!row)"] || "";
-      var filedType = "";
-      if (processedInto.indexOf(ASSIGNMENTS_SHEET) === 0) filedType = "Assignment";
-      else if (processedInto.indexOf(ASSESSMENTS_SHEET) === 0) filedType = "Assessment";
+      // v1.4.0 -- now goes through the same resolveFiledRecord_ helper
+      // processOneInboxItemById_ uses, so filedId (the filed record's own
+      // stable Assignment/Assessment ID) comes along too -- needed for the
+      // Inbox "delete this AND its filed record" option.
+      var resolvedFiled = resolveFiledRecord_(processedInto);
       return {
         id: r["Inbox ID"], module: r["Module"], type: r["Item type"], title: r["Title"],
         dueDate: isoDate_(r["Due date"]), dueTime: isoTime_(r["Due time"]), venue: r["Venue or link"],
         notes: r["Notes"], priority: r["Priority"], processed: r["Processed"] === true,
-        sendToCalendar: r["Send to Calendar"] === true, filedType: filedType
+        sendToCalendar: r["Send to Calendar"] === true, filedType: resolvedFiled.filedType, filedId: resolvedFiled.filedId
       };
     });
 
@@ -942,29 +944,66 @@ function api_toggleInboxProcessed(inboxId, processed) {
  * touches any Assignment/Assessment it may already have been filed as, and
  * never touches Calendar. The frontend confirmation modal is responsible for
  * explaining that distinction to the user before this is ever called.
+ * Core logic factored into deleteInboxRowCore_ (no locking of its own) so
+ * api_deleteInboxItemAndFiled below can run it under a single outer lock
+ * alongside the filed-record delete, instead of nesting two independent
+ * LockService acquisitions in one execution.
  */
+function deleteInboxRowCore_(inboxId) {
+  var id = requireText_(inboxId, "Inbox ID", 40);
+  var sheet = SpreadsheetApp.getActive().getSheetByName(INBOX_SHEET);
+  if (!sheet) return fail_(new Error("Sheet not found: " + INBOX_SHEET));
+  var map = getColMap_(sheet);
+  var lastRow = sheet.getLastRow();
+  var idCol = col_(map, "Inbox ID");
+  var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
+  var targetRow = -1;
+  for (var i = 0; i < ids.length; i++) { if (ids[i][0] === id) { targetRow = HEADER_ROW + 1 + i; break; } }
+  if (targetRow === -1) return fail_(new Error("Could not find Inbox item " + id + " — it may already have been deleted."));
+  var wasProcessed = sheet.getRange(targetRow, col_(map, "Processed")).getValue() === true;
+  // v1.2.0 -- capture the human title before deleting, so the activity log
+  // shows the title rather than a bare Inbox ID (Feature: human-readable
+  // activity history). The ID is kept in the detail text.
+  var title = map["Title"] ? sheet.getRange(targetRow, col_(map, "Title")).getValue() : id;
+  sheet.deleteRow(targetRow);
+  logAutomation_("Inbox item deleted", title || id, "Deleted", "ID " + id + "; row " + targetRow + (wasProcessed ? " (was processed)" : ""));
+  return ok_({ inboxId: id, wasProcessed: wasProcessed });
+}
 function api_deleteInboxItem(inboxId) {
   var lock = LockService.getScriptLock();
   try {
     if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
-    var id = requireText_(inboxId, "Inbox ID", 40);
-    var sheet = SpreadsheetApp.getActive().getSheetByName(INBOX_SHEET);
-    if (!sheet) return fail_(new Error("Sheet not found: " + INBOX_SHEET));
-    var map = getColMap_(sheet);
-    var lastRow = sheet.getLastRow();
-    var idCol = col_(map, "Inbox ID");
-    var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
-    var targetRow = -1;
-    for (var i = 0; i < ids.length; i++) { if (ids[i][0] === id) { targetRow = HEADER_ROW + 1 + i; break; } }
-    if (targetRow === -1) return fail_(new Error("Could not find Inbox item " + id + " — it may already have been deleted."));
-    var wasProcessed = sheet.getRange(targetRow, col_(map, "Processed")).getValue() === true;
-    // v1.2.0 -- capture the human title before deleting, so the activity log
-    // shows the title rather than a bare Inbox ID (Feature: human-readable
-    // activity history). The ID is kept in the detail text.
-    var title = map["Title"] ? sheet.getRange(targetRow, col_(map, "Title")).getValue() : id;
-    sheet.deleteRow(targetRow);
-    logAutomation_("Inbox item deleted", title || id, "Deleted", "ID " + id + "; row " + targetRow + (wasProcessed ? " (was processed)" : ""));
-    return ok_({ inboxId: id, wasProcessed: wasProcessed });
+    return deleteInboxRowCore_(inboxId);
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
+/**
+ * v1.4.0 -- companion to api_deleteInboxItem for the case the delete
+ * confirmation modal now explicitly offers: also delete the Assignment/
+ * Assessment this Inbox item was already filed as (and its Calendar event,
+ * if `deleteCalendarEvent` is true), not just the Inbox capture. `filedType`
+ * / `filedId` come from the Inbox item's own filedType/filedId (resolved by
+ * resolveFiledRecord_ in api_getPlannerData) -- never re-derived by title/
+ * module matching, which could hit the wrong row.
+ * The filed record is deleted FIRST; if that fails (or if a requested
+ * Calendar deletion fails), the Inbox row is left untouched too, so a
+ * partial failure never silently leaves things half-deleted.
+ */
+function api_deleteInboxItemAndFiled(inboxId, filedType, filedId, deleteCalendarEvent) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var filedResult = null;
+    if (filedType && filedId) {
+      var sheetName = filedType === "Assignment" ? ASSIGNMENTS_SHEET : filedType === "Assessment" ? ASSESSMENTS_SHEET : null;
+      var idHeader = filedType === "Assignment" ? "Assignment ID" : "Assessment ID";
+      if (!sheetName) return fail_(new Error("Unknown filed type: " + filedType));
+      filedResult = deleteEntityRowCore_(sheetName, idHeader, filedId, !!deleteCalendarEvent, filedType);
+      if (!filedResult.ok) return filedResult;
+    }
+    var inboxResult = deleteInboxRowCore_(inboxId);
+    if (!inboxResult.ok) return inboxResult;
+    return ok_({ inboxId: inboxId, filed: filedResult ? filedResult.data : null });
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
@@ -1319,59 +1358,67 @@ function api_deleteAfEntry(afItemId) {
 // requested Calendar deletion fails, the workbook row is NOT deleted either,
 // so nothing is ever silently left out of sync between the two.
 // ============================================================
+// Core logic with no locking of its own -- deleteEntityRow_ below wraps it
+// with a single LockService acquisition for a normal single-record delete;
+// api_deleteInboxItemAndFiled calls it directly under ITS OWN outer lock
+// instead, so one execution never nests two independent script-lock
+// acquisitions.
+function deleteEntityRowCore_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel) {
+  if (!entityId) return fail_(new Error("No " + idHeader + " given."));
+  var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (!sheet) return fail_(new Error("Sheet not found: " + sheetName));
+  var map = getColMap_(sheet);
+  var lastRow = sheet.getLastRow();
+  var idCol = col_(map, idHeader);
+  var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
+  var targetRow = -1;
+  for (var i = 0; i < ids.length; i++) { if (ids[i][0] === entityId) { targetRow = HEADER_ROW + 1 + i; break; } }
+  if (targetRow === -1) return fail_(new Error("Could not find " + logLabel + " " + entityId + " — it may already have been deleted."));
+
+  // v1.2.0 -- capture a human label before deleting, so the activity log
+  // reads as a title (Assignments/Assessments) or "Module — Topic/Study
+  // type" (Study Planner, which has no Title column) instead of a bare
+  // stable ID (Feature: human-readable activity history). Purely a
+  // logging-text change -- the delete logic and return contract below are
+  // unchanged.
+  var humanLabel = entityId;
+  if (map["Title"]) {
+    var titleVal = sheet.getRange(targetRow, col_(map, "Title")).getValue();
+    if (titleVal) humanLabel = titleVal;
+  } else if (map["Module"]) {
+    var modVal = sheet.getRange(targetRow, col_(map, "Module")).getValue();
+    var topicVal = map["Topic"] ? sheet.getRange(targetRow, col_(map, "Topic")).getValue()
+      : (map["Study type"] ? sheet.getRange(targetRow, col_(map, "Study type")).getValue() : "");
+    humanLabel = topicVal ? (modVal + " — " + topicVal) : modVal;
+  }
+
+  var calendarEventId = map["Calendar Event ID"] ? sheet.getRange(targetRow, col_(map, "Calendar Event ID")).getValue() : "";
+  var calendarResult = "Not requested";
+  if (calendarEventId) {
+    if (deleteCalendarEvent) {
+      var delResult = deleteCalendarEventByStoredId_(calendarEventId);
+      if (!delResult.ok) {
+        // Do not pretend success and do not delete the workbook row either
+        // -- leaving both sides intact (row + stale-but-real Calendar
+        // event) is recoverable; deleting the row while the event survives
+        // untracked would not be.
+        return fail_(new Error("Calendar event could not be deleted (" + delResult.error + "). The " + logLabel + " row was NOT deleted either — try again."));
+      }
+      calendarResult = delResult.alreadyGone ? "Already gone from Calendar" : "Deleted";
+    } else {
+      calendarResult = "Left in Calendar (event " + calendarEventId + ")";
+    }
+  }
+
+  sheet.deleteRow(targetRow);
+  logAutomation_(logLabel + " deleted", humanLabel, "Deleted", "ID " + entityId + "; row " + targetRow + "; calendar: " + calendarResult);
+  return ok_({ id: entityId, calendarEventId: calendarEventId || null, calendarResult: calendarResult });
+}
 function deleteEntityRow_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel) {
   var lock = LockService.getScriptLock();
   try {
     if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
-    if (!entityId) return fail_(new Error("No " + idHeader + " given."));
-    var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
-    if (!sheet) return fail_(new Error("Sheet not found: " + sheetName));
-    var map = getColMap_(sheet);
-    var lastRow = sheet.getLastRow();
-    var idCol = col_(map, idHeader);
-    var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
-    var targetRow = -1;
-    for (var i = 0; i < ids.length; i++) { if (ids[i][0] === entityId) { targetRow = HEADER_ROW + 1 + i; break; } }
-    if (targetRow === -1) return fail_(new Error("Could not find " + logLabel + " " + entityId + " — it may already have been deleted."));
-
-    // v1.2.0 -- capture a human label before deleting, so the activity log
-    // reads as a title (Assignments/Assessments) or "Module — Topic/Study
-    // type" (Study Planner, which has no Title column) instead of a bare
-    // stable ID (Feature: human-readable activity history). Purely a
-    // logging-text change -- the delete logic and return contract below are
-    // unchanged.
-    var humanLabel = entityId;
-    if (map["Title"]) {
-      var titleVal = sheet.getRange(targetRow, col_(map, "Title")).getValue();
-      if (titleVal) humanLabel = titleVal;
-    } else if (map["Module"]) {
-      var modVal = sheet.getRange(targetRow, col_(map, "Module")).getValue();
-      var topicVal = map["Topic"] ? sheet.getRange(targetRow, col_(map, "Topic")).getValue()
-        : (map["Study type"] ? sheet.getRange(targetRow, col_(map, "Study type")).getValue() : "");
-      humanLabel = topicVal ? (modVal + " — " + topicVal) : modVal;
-    }
-
-    var calendarEventId = map["Calendar Event ID"] ? sheet.getRange(targetRow, col_(map, "Calendar Event ID")).getValue() : "";
-    var calendarResult = "Not requested";
-    if (calendarEventId) {
-      if (deleteCalendarEvent) {
-        var delResult = deleteCalendarEventByStoredId_(calendarEventId);
-        if (!delResult.ok) {
-          // Do not pretend success and do not delete the workbook row either
-          // -- leaving both sides intact (row + stale-but-real Calendar
-          // event) is recoverable; deleting the row while the event survives
-          // untracked would not be.
-          return fail_(new Error("Calendar event could not be deleted (" + delResult.error + "). The " + logLabel + " row was NOT deleted either — try again."));
-        }
-        calendarResult = delResult.alreadyGone ? "Already gone from Calendar" : "Deleted";
-      } else {
-        calendarResult = "Left in Calendar (event " + calendarEventId + ")";
-      }
-    }
-
-    sheet.deleteRow(targetRow);
-    logAutomation_(logLabel + " deleted", humanLabel, "Deleted", "ID " + entityId + "; row " + targetRow + "; calendar: " + calendarResult);
-    return ok_({ id: entityId, calendarEventId: calendarEventId || null, calendarResult: calendarResult });
+    return deleteEntityRowCore_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel);
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 

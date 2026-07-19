@@ -547,6 +547,35 @@ function processAcademicInbox() {
  * the normal {ok:false, error} contract. Returns a plain result object on
  * every other path, including the idempotent "already processed" case.
  */
+/**
+ * v1.4.0 -- given the raw "Processed into (sheet!row)" cell value, resolves
+ * which sheet/type an Inbox item was filed as and that filed record's own
+ * stable ID (Assignment ID / Assessment ID), by reading it off the sheet at
+ * the stored row. Extracted from the idempotent-path logic below (was
+ * previously inlined only there) so api_getPlannerData can also expose
+ * filedId to the frontend -- needed for the Inbox "delete this AND its
+ * filed record" option. Best-effort only, never throws: returns
+ * {filedType:"", filedId:""} if the reference is blank, unrecognized, or
+ * the row no longer holds that ID for any reason.
+ */
+function resolveFiledRecord_(processedIntoValue) {
+  var parts = String(processedIntoValue || "").split("!");
+  var sheetName = parts[0] || "";
+  var row = parseInt(parts[1], 10);
+  var filedType = (sheetName === ASSIGNMENTS_SHEET) ? "Assignment" :
+    (sheetName === ASSESSMENTS_SHEET) ? "Assessment" : "";
+  var filedId = "";
+  if (filedType && row) {
+    try {
+      var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+      var map = getColMap_(sheet);
+      var idHeader = (filedType === "Assignment") ? "Assignment ID" : "Assessment ID";
+      filedId = sheet.getRange(row, col_(map, idHeader)).getValue();
+    } catch (e) { /* best-effort only */ }
+  }
+  return { filedType: filedType, filedId: filedId };
+}
+
 function processOneInboxItemById_(inboxId) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(LOCK_WAIT_MS)) throw new Error("Workbook is busy — try again in a moment.");
@@ -567,20 +596,9 @@ function processOneInboxItemById_(inboxId) {
       // call) already filed this row. Report where, rather than filing it
       // again.
       var existingLocation = inbox.getRange(row, col_(map, "Processed into (sheet!row)")).getValue() || "";
-      var parts = String(existingLocation).split("!");
-      var existingSheetName = parts[0] || "";
-      var existingRow = parseInt(parts[1], 10);
-      var filedType = (existingSheetName === ASSIGNMENTS_SHEET) ? "Assignment" :
-        (existingSheetName === ASSESSMENTS_SHEET) ? "Assessment" : "Unknown";
-      var filedId = "";
-      if (existingSheetName && existingRow) {
-        try {
-          var esheet = SpreadsheetApp.getActive().getSheetByName(existingSheetName);
-          var emap = getColMap_(esheet);
-          var idHeader = (filedType === "Assignment") ? "Assignment ID" : "Assessment ID";
-          filedId = esheet.getRange(existingRow, col_(emap, idHeader)).getValue();
-        } catch (e) { /* best-effort only -- idempotent response still returns without it */ }
-      }
+      var resolved = resolveFiledRecord_(existingLocation);
+      var filedType = resolved.filedType || "Unknown";
+      var filedId = resolved.filedId;
       // v1.1.12 master -- Feature 3 refinement: calendarStatus is always one
       // of Created/Updated/Skipped/Not requested/Error. Nothing was actually
       // attempted on this call (the item was already filed earlier), so
