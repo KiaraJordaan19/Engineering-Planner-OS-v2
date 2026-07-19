@@ -45,6 +45,7 @@ function runMigrationStatusCheck() {
   checkColumn("Drive Resources v1.4.0", RESOURCES_SHEET, HEADER_ROW, "Drive category", "runDriveResourcesV140Migration");
   checkColumn("Reminders Feed v1.4.0", ASSIGNMENTS_SHEET, HEADER_ROW, "Synced to Reminders", "runRemindersFeedV140Migration");
   checkColumn("AF Components v1.4.1 (item type + weighting)", AF_COMPONENTS_SHEET, HEADER_ROW, "Weight", "runAfComponentsV141Migration");
+  checkColumn("Study Priority v1.4.2 (include toggle + manual priority)", MODULES_SHEET, HEADER_ROW, "Manual priority override", "runStudyPriorityV142Migration");
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");

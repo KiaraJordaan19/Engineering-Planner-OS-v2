@@ -417,6 +417,18 @@ function api_getPlannerData() {
         coordinatorEmail: m["Coordinator email"] || "",
         lecturerName: m["Lecturer name"] || "",
         lecturerEmail: m["Lecturer email"] || "",
+        // v1.4.2 -- Study Planner-specific include switch (independent of
+        // "Active status", which drives everything else). A blank cell
+        // (module added before/without the migration having set it) is
+        // treated as TRUE, never silently excluded -- only an explicit
+        // FALSE excludes.
+        includeInStudyPlan: m["Include in study plan (TRUE/FALSE)"] !== false,
+        // v1.4.2 -- when set, always wins over ai_computePriority_'s
+        // computed category -- the only way a module with no verified
+        // AF/A1/A2/A3 framework (e.g. Industrial Engineering) can appear
+        // in the Marks Priority Engine / weekly allocation / study plan
+        // suggestions at all.
+        manualPriorityOverride: (VALID_PRIORITY_OVERRIDES.indexOf(m["Manual priority override"]) !== -1) ? m["Manual priority override"] : null,
         contactNotes: m["Contact notes"] || ""
       };
     });
@@ -671,6 +683,22 @@ function api_getPlannerData() {
     var guideEntries = readUserGuide_();
     var currentPhaseIndex = currentSemesterPhaseIndex_();
 
+    // v1.4.2 -- flat {module,type,date} list straight off "05 Timetable
+    // Import", used only to find each module's next Tutorial session (see
+    // computeAcademicIntelligence_'s nextTutorialByModule) -- a tutorial is
+    // when AF tests actually get written, so it's its own priority signal
+    // alongside the next A1/A2/A3. [] on a workbook with no timetable data,
+    // never fabricated.
+    var timetableData = getSheetRowsRaw_(TIMETABLE_SHEET, HEADER_ROW);
+    var timetableSessions = [];
+    if (timetableData) {
+      var ttDateIdx = timetableData.headers.indexOf("Start date"), ttModuleIdx = timetableData.headers.indexOf("Module"), ttTypeIdx = timetableData.headers.indexOf("Session type");
+      timetableData.rows.forEach(function (r) {
+        if (!r[ttModuleIdx]) return;
+        timetableSessions.push({ module: r[ttModuleIdx], type: r[ttTypeIdx], date: isoDate_(r[ttDateIdx]) });
+      });
+    }
+
     // v1.3.0 -- Deterministic Academic Intelligence. Reuses every array
     // already built above (no extra sheet reads except "22 Exam Focus Log",
     // which v1.2.0 never read at all). See computeAcademicIntelligence_ for
@@ -682,7 +710,7 @@ function api_getPlannerData() {
     var academicIntelligence = computeAcademicIntelligence_({
       modules: modules, marksTracker: marksTracker, assessments: assessments, studySessions: studySessions,
       studyTasks: studyTasks, revisionTracker: revisionTracker, resources: resources, afComponents: afComponents,
-      settings: settings, logRows: syncLog, todayIso: isoDate_(new Date())
+      settings: settings, logRows: syncLog, todayIso: isoDate_(new Date()), timetableSessions: timetableSessions
     });
 
     return ok_({
@@ -2887,6 +2915,14 @@ function api_saveModuleAcademicConfig(moduleCode, form) {
     if (typeof form.compulsoryPractical === "boolean" && map['Compulsory practical/lab (TRUE/FALSE)']) {
       sheet.getRange(targetRow, col_(map, 'Compulsory practical/lab (TRUE/FALSE)')).setValue(form.compulsoryPractical);
     }
+    // v1.4.2 -- Study Planner-specific include switch + manual priority override.
+    if (typeof form.includeInStudyPlan === "boolean" && map['Include in study plan (TRUE/FALSE)']) {
+      sheet.getRange(targetRow, col_(map, 'Include in study plan (TRUE/FALSE)')).setValue(form.includeInStudyPlan);
+    }
+    if (form.manualPriorityOverride !== undefined && map['Manual priority override']) {
+      var overrideVal = (VALID_PRIORITY_OVERRIDES.indexOf(form.manualPriorityOverride) !== -1) ? form.manualPriorityOverride : "";
+      sheet.getRange(targetRow, col_(map, 'Manual priority override')).setValue(overrideVal);
+    }
 
     logAutomation_("Module configuration saved", moduleCode, "Updated", "");
     return ok_({});
@@ -2982,9 +3018,18 @@ function isoWeekKey_(dateIso) {
  * which, purely so the reason string below can disclose it honestly.
  */
 function ai_computePriority_(m) {
+  // v1.4.2 -- a manual override (03 Modules: "Manual priority override")
+  // always wins outright, for any module, checked BEFORE the Rule-status
+  // gate below -- this is the only path that can give a module with no
+  // verified framework (e.g. Industrial Engineering) a real category, so
+  // it stops being permanently invisible to the study plan.
+  if (m.manualPriorityOverride) {
+    return { code: m.code, name: m.name, category: m.manualPriorityOverride, score: null,
+      reasons: ["Manually set to \"" + m.manualPriorityOverride + "\" in 03 Modules (\"Manual priority override\") -- overrides whatever would otherwise be computed."] };
+  }
   if (m.ruleStatus !== "Verified") {
     return { code: m.code, name: m.name, category: "Rules Incomplete", score: null,
-      reasons: ["Module Rules for " + m.name + " are not marked \"Verified\" in 04 Module Rules -- no priority is computed until rules are verified."] };
+      reasons: ["Module Rules for " + m.name + " are not marked \"Verified\" in 04 Module Rules -- no priority is computed until rules are verified. Set \"Manual priority override\" in 03 Modules to include this module anyway."] };
   }
   var current = pctToNumber_(m.finalOrProvisional);
   if (current === null) {
@@ -3012,6 +3057,14 @@ function ai_computePriority_(m) {
   if (typeof m.daysToNextAssessment === "number" && m.daysToNextAssessment >= 0) {
     if (m.daysToNextAssessment <= 7) { score += 30; reasons.push("Next assessment (" + (m.nextAssessmentLabel || "upcoming") + ") is in " + m.daysToNextAssessment + " day(s)."); }
     else if (m.daysToNextAssessment <= 14) { score += 15; reasons.push("Next assessment (" + (m.nextAssessmentLabel || "upcoming") + ") is in " + m.daysToNextAssessment + " days."); }
+  }
+  // v1.4.2 -- a tutorial is when this module's AF tests actually get
+  // written, so it deserves its own (smaller, since tutorials are frequent
+  // and lower-stakes individually than a formal A1/A2/A3) proximity boost,
+  // separate from and additive to the exam-proximity one above.
+  if (typeof m.daysToNextTutorial === "number" && m.daysToNextTutorial >= 0) {
+    if (m.daysToNextTutorial <= 3) { score += 20; reasons.push("Next tutorial (" + (m.nextTutorialLabel || "upcoming") + ") is in " + m.daysToNextTutorial + " day(s) -- this is when this module's AF tests are written."); }
+    else if (m.daysToNextTutorial <= 7) { score += 10; reasons.push("Next tutorial (" + (m.nextTutorialLabel || "upcoming") + ") is in " + m.daysToNextTutorial + " days."); }
   }
   if (m.repeated) { score += 15; reasons.push("Repeated module -- elevated monitoring applies regardless of current mark."); }
   if (typeof m.difficulty === "number" && m.difficulty >= 4) { score += 10; reasons.push("High conceptual difficulty (" + m.difficulty + "/5)."); }
@@ -3698,6 +3751,22 @@ function computeAcademicIntelligence_(bundle) {
     }
   });
 
+  // v1.4.2 -- next scheduled Tutorial session per module (05 Timetable
+  // Import), same "never negative, keep the soonest" shape as
+  // nextAssessmentByModule above. bundle.timetableSessions is [] on a
+  // workbook where 05 Timetable Import is empty or missing -- degrades to
+  // "no tutorial signal" for every module, never a fabricated date.
+  var nextTutorialByModule = {};
+  (bundle.timetableSessions || []).forEach(function (s) {
+    if (s.type !== "Tutorial" || !s.date) return;
+    var d = daysBetween_(todayIso, s.date);
+    if (d === null || d < 0) return;
+    var existing = nextTutorialByModule[s.module];
+    if (!existing || d < existing.days) {
+      nextTutorialByModule[s.module] = { days: d, label: "Tutorial", date: s.date };
+    }
+  });
+
   var incompleteTasksByModule = {}, weakTopicsByModule = {}, weakSinceByModule = {};
   bundle.studyTasks.forEach(function (t) {
     if (!t.completed) incompleteTasksByModule[t.module] = (incompleteTasksByModule[t.module] || 0) + 1;
@@ -3763,9 +3832,13 @@ function computeAcademicIntelligence_(bundle) {
     if (practiceTypes.indexOf(s.type) !== -1) practiceByModule[s.module] = (practiceByModule[s.module] || 0) + 1;
   });
 
-  var prioritized = bundle.modules.filter(function (m) { return m.active; }).map(function (m) {
+  // v1.4.2 -- "Include in study plan" (03 Modules) is a Study Planner-
+  // specific filter, separate from "active" -- a module can be Active
+  // (shows in Attendance/Calendar/etc.) but excluded here, or vice versa.
+  var prioritized = bundle.modules.filter(function (m) { return m.active && m.includeInStudyPlan; }).map(function (m) {
     var marksRow = marksByModule[m.name];
     var nextA = nextAssessmentByModule[m.name];
+    var nextT = nextTutorialByModule[m.name];
     var scores = (scoresByModule[m.name] || []).map(function (r) { return r.score; });
     // Prefer 11 Marks Tracker's own "Final / provisional (after A3)" value
     // when it's actually recorded; otherwise fall back to Marks
@@ -3786,6 +3859,8 @@ function computeAcademicIntelligence_(bundle) {
       currentMarkIsEstimatedFallback: usedEstimatedFallback,
       targetMarkOverride: m.targetMark, settingsTargetMark: bundle.settings.targetMark,
       daysToNextAssessment: nextA ? nextA.days : null, nextAssessmentLabel: nextA ? nextA.label : null,
+      daysToNextTutorial: nextT ? nextT.days : null, nextTutorialLabel: nextT ? nextT.label : null,
+      manualPriorityOverride: m.manualPriorityOverride,
       repeated: m.repeated, difficulty: m.difficulty, workload: m.workload,
       incompleteTaskCount: incompleteTasksByModule[m.name] || 0, weakTopicCount: weakTopicsByModule[m.name] || 0,
       recentPracticeScores: scores, requiredFutureMark: requiredA3ByTarget(m, marksRow, (typeof m.targetMark === "number") ? m.targetMark : bundle.settings.targetMark)
@@ -3795,6 +3870,8 @@ function computeAcademicIntelligence_(bundle) {
     priority.daysToNextAssessment = input.daysToNextAssessment;
     priority.nextAssessmentLabel = input.nextAssessmentLabel;
     priority.nextAssessmentId = nextA ? nextA.id : null;
+    priority.daysToNextTutorial = input.daysToNextTutorial;
+    priority.nextTutorialLabel = input.nextTutorialLabel;
     return priority;
   });
 

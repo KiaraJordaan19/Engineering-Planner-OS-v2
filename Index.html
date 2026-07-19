@@ -184,6 +184,8 @@ var SESSION_STATUS_COLORS = { Planned: ['#FBEFD9', '#B58821'], Completed: ['#E4F
 var RESOURCE_TYPES_LIST = ['Lecture', 'Lecture video', 'Tutorial', 'Past paper', 'Formula bible', 'Textbook chapter', 'Practice set', 'Flashcards', 'Summary notes', 'Mistake review', 'Other'];
 // v1.4.0 -- mirrors VALID_DRIVE_CATEGORIES in Drive_Resources_v1.4.0.js.
 var VALID_DRIVE_CATEGORIES_LIST = ['Completed tutorial tests', 'Assessment or exam', 'Questions for professors'];
+// v1.4.2 -- mirrors VALID_PRIORITY_OVERRIDES in Study_Priority_v1.4.2_Migration.js.
+var VALID_PRIORITY_OVERRIDES_LIST = ['Critical', 'Very High', 'High', 'Maintain', 'Low'];
 var RESOURCE_STATUSES_LIST = ['Not started', 'In progress', 'Completed', 'Reviewed', 'Needs redo'];
 var RESOURCE_STATUS_COLORS = { 'Not started': ['#F3E3D2', '#8A7A68'], 'In progress': ['#FBEFD9', '#B58821'], Completed: ['#E4F0E9', '#3F7A5C'], Reviewed: ['#E4F0E9', '#3F7A5C'], 'Needs redo': ['#F7E2D8', '#8F3B23'] };
 // Each resource type maps to four short progress-flag labels (Flag A-D) --
@@ -333,6 +335,7 @@ var state = {
   studySessionFormOpen: false,
   studySessionForm: null,       // populated by openStudySessionForm_()
   studySessionEditingId: null,  // null = adding new, else the Study Session ID being edited
+  studyIncludeChecklistOpen: false, // v1.4.2 -- "Which modules?" panel on Study Planner, collapsed by default
   independentStudyFormOpen: false,
   independentStudyForm: null,
   completingSessionId: null,    // Study Session ID currently showing its inline completion form, or null
@@ -2769,11 +2772,38 @@ function studySessionCardHtml_(s) {
     '</div>';
 }
 
+// v1.4.2 -- quick "which modules?" checklist, shown collapsed by default
+// above the Generate controls. Each row writes straight through
+// api_saveModuleAcademicConfig (same single-field partial-form pattern
+// toggleResourceStatusUi_ etc. already use elsewhere) -- no separate
+// open/close form needed, matches "glance at / adjust before generating."
+function studyIncludeChecklistHtml_(vm) {
+  var priorityByCode = {};
+  (vm.priorities || []).forEach(function (p) { priorityByCode[p.code] = p; });
+  var rows = vm.modules.filter(function (m) { return m.active; }).map(function (m) {
+    var p = priorityByCode[m.code];
+    var noOverride = !m.manualPriorityOverride;
+    var needsOverride = noOverride && p && (p.category === 'Rules Incomplete' || p.category === 'Insufficient data');
+    var colors = p ? (PRIORITY_CATEGORY_COLORS[p.category] || PRIORITY_CATEGORY_COLORS['Low']) : PRIORITY_CATEGORY_COLORS['Low'];
+    var badge = p ? '<span style="font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:' + colors[0] + ';color:' + colors[1] + ';">' + esc(p.category) + '</span>' : '';
+    var overrideOptions = [['', needsOverride ? 'No priority — choose one…' : 'Computed automatically']].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (o) { return [o, o]; }))
+      .map(function (pair) { return '<option value="' + pair[0] + '"' + (m.manualPriorityOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
+      '<div class="ep-clickable" onclick="' + h_('quickToggleStudyInclude_', [m.code, m.includeInStudyPlan]) + '" style="' + (m.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div>' +
+      '<div style="width:9px;height:9px;border-radius:3px;background:' + m.color + ';flex-shrink:0;"></div>' +
+      '<div style="flex:1;min-width:120px;font-size:13px;font-weight:600;">' + esc(m.short) + '</div>' +
+      (needsOverride ? '<select onchange="' + hv_('quickSetPriorityOverride_', [m.code]) + '" style="padding:6px 8px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:12px;font-family:\'Inter\',sans-serif;">' + overrideOptions + '</select>' : badge) +
+      '</div>';
+  }).join('');
+  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;margin-bottom:16px;">' + rows + '</div>';
+}
 function screenStudy_(vm) {
   var cards = vm.studySessions.length ? vm.studySessions.map(studySessionCardHtml_).join('')
     : '<div style="font-size:13px;color:#8A7A68;">No study sessions planned yet. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('openStudySessionForm_', [null]) + '">Add one.</span></div>';
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Study Planner</div>' +
     '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Preview · Learn · Practice · Mistake · Recall · Formula · Visualization · Programming · Synthesis · Exam · Weekly Review</div>' +
+    '<div class="ep-clickable" onclick="' + h_('toggleStudyIncludeChecklist_', []) + '" style="font-size:12.5px;font-weight:700;color:#B24B2E;cursor:pointer;margin-bottom:8px;">' + (state.studyIncludeChecklistOpen ? '▾' : '▸') + ' Which modules? (include, priority)</div>' +
+    (state.studyIncludeChecklistOpen ? studyIncludeChecklistHtml_(vm) : '') +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">' +
     '<div class="ep-clickable" onclick="' + h_('openStudySessionForm_', [null]) + '" style="background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Add study session</div>' +
     '<div class="ep-clickable" onclick="' + h_('openIndependentStudyForm_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Log independent study</div>' +
@@ -2874,8 +2904,11 @@ function moduleConfigFormHtml_(m) {
     colour: m.color, difficulty: m.difficulty || '', workload: m.workload || '', targetMark: m.targetMark || '',
     minWeeklyHours: m.minWeeklyHours || '', repeated: m.repeated, attendanceSensitive: m.attendanceSensitive,
     compulsoryPractical: m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
-    lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || ''
+    lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
+    includeInStudyPlan: m.includeInStudyPlan !== false, manualPriorityOverride: m.manualPriorityOverride || ''
   };
+  var overrideOptions = [['', 'Computed automatically (no override)']].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (p) { return [p, p]; }))
+    .map(function (pair) { return '<option value="' + pair[0] + '"' + (f.manualPriorityOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
   return '<div style="background:#F9EFE3;border-radius:12px;padding:14px;margin-top:12px;display:flex;flex-direction:column;gap:8px;">' +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;">MODULE CONFIGURATION</div>' +
     '<div style="display:flex;gap:8px;">' +
@@ -2892,6 +2925,12 @@ function moduleConfigFormHtml_(m) {
     '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'attendanceSensitive']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.attendanceSensitive ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Attendance-sensitive lecture</span></div>' +
     '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'compulsoryPractical']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.compulsoryPractical ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Compulsory practical/lab</span></div>' +
     '</div>' +
+    '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">STUDY PLANNER</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+    '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'includeInStudyPlan']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Include in study plan</span></div>' +
+    '<select onchange="' + hv_('setModuleConfigField_', [m.code, 'manualPriorityOverride']) + '" style="flex:1;min-width:180px;padding:9px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;">' + overrideOptions + '</select>' +
+    '</div>' +
+    (m.ruleStatus !== 'Verified' && !f.manualPriorityOverride ? '<div style="font-size:11px;color:#8A7A68;">This module has no verified AF/A1/A2/A3 framework, so it won\'t get a priority or study suggestions unless you set an override above.</div>' : '') +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">CONTACTS</div>' +
     '<div style="display:flex;gap:8px;">' +
     '<input value="' + escAttr(f.coordinatorName) + '" oninput="' + hv_('setModuleConfigField_', [m.code, 'coordinatorName']) + '" placeholder="Coordinator name" style="flex:1;padding:9px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
@@ -4055,6 +4094,22 @@ function saveRevisionEdit_(module, topic) {
   });
 }
 
+// ---- Study Planner: "Which modules?" quick checklist ----
+function toggleStudyIncludeChecklist_() { state.studyIncludeChecklistOpen = !state.studyIncludeChecklistOpen; render(); }
+function quickToggleStudyInclude_(code, currentValue) {
+  runScript_('api_saveModuleAcademicConfig', [code, { includeInStudyPlan: !currentValue }]).then(function (res) {
+    if (!res.ok) { showToast_('error', 'Could not save: ' + res.error); return; }
+    loadPlannerData();
+  });
+}
+function quickSetPriorityOverride_(code, value) {
+  runScript_('api_saveModuleAcademicConfig', [code, { manualPriorityOverride: value }]).then(function (res) {
+    if (!res.ok) { showToast_('error', 'Could not save: ' + res.error); return; }
+    showToast_('success', value ? 'Priority override set.' : 'Priority override cleared.');
+    loadPlannerData();
+  });
+}
+
 // ---- Module configuration + contacts ----
 function toggleModuleConfigUi_(code) {
   var nowOpen = !state.moduleConfigFormOpenByCode[code];
@@ -4064,7 +4119,8 @@ function toggleModuleConfigUi_(code) {
       colour: m.color || '#8B8B87', difficulty: m.difficulty || '', workload: m.workload || '', targetMark: m.targetMark || '',
       minWeeklyHours: m.minWeeklyHours || '', repeated: !!m.repeated, attendanceSensitive: !!m.attendanceSensitive,
       compulsoryPractical: !!m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
-      lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || ''
+      lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
+      includeInStudyPlan: m.includeInStudyPlan !== false, manualPriorityOverride: m.manualPriorityOverride || ''
     };
   }
   state.moduleConfigFormOpenByCode[code] = nowOpen;
