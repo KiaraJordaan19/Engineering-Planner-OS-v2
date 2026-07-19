@@ -276,6 +276,7 @@ var state = {
   localAfExcused: {},
   localResourcesReviewed: {},
   localStudyDone: {},
+  localIncludeOverrides: {}, // v1.4.4 -- {moduleCode: boolean}, optimistic overlay for the Study Planner Include checkbox
   // v1.3.0 -- Deterministic Academic Intelligence UI state. Nothing here is
   // ever sent to the backend except through the explicit
   // api_activateExamFocus confirmation call -- weeklyAllocationOverrides in
@@ -2791,8 +2792,13 @@ function studyIncludeChecklistHtml_(vm) {
     var blankLabel = hasComputed ? ('Computed: ' + p.category) : 'No priority yet — choose one…';
     var priorityOptions = [['', blankLabel]].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (o) { return [o, o]; }))
       .map(function (pair) { return '<option value="' + pair[0] + '"' + (sessionOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    // v1.4.4 -- an optimistic local overlay (state.localIncludeOverrides)
+    // wins over the last-loaded server value, exactly like
+    // localAfWritten/localAfExcused do elsewhere, so the checkbox flips
+    // instantly instead of waiting for a full loadPlannerData() round trip.
+    var included = (m.code in state.localIncludeOverrides) ? state.localIncludeOverrides[m.code] : m.includeInStudyPlan;
     return '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
-      '<div class="ep-clickable" onclick="' + h_('quickToggleStudyInclude_', [m.code, m.includeInStudyPlan]) + '" style="' + (m.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div>' +
+      '<div class="ep-clickable" onclick="' + h_('quickToggleStudyInclude_', [m.code, included]) + '" style="' + (included ? CHECK_ON : CHECK_OFF) + '"></div>' +
       '<div style="width:9px;height:9px;border-radius:3px;background:' + m.color + ';flex-shrink:0;"></div>' +
       '<div style="flex:1;min-width:120px;font-size:13px;font-weight:600;">' + esc(m.short) + '</div>' +
       '<select onchange="' + hv_('setStudyGenPriorityOverride_', [m.code]) + '" style="padding:6px 8px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:12px;font-family:\'Inter\',sans-serif;">' + priorityOptions + '</select>' +
@@ -4099,10 +4105,21 @@ function saveRevisionEdit_(module, topic) {
 
 // ---- Study Planner: "Which modules?" quick checklist ----
 function toggleStudyIncludeChecklist_() { state.studyIncludeChecklistOpen = !state.studyIncludeChecklistOpen; render(); }
+// v1.4.4 -- optimistic: flips instantly (matches toggleAfWritten's pattern)
+// instead of waiting for a full loadPlannerData() reload before the
+// checkbox visually updates. Reverts the local overlay only if the save
+// itself fails, so a rapid second click always reads the just-flipped
+// value, not a stale pre-click one.
 function quickToggleStudyInclude_(code, currentValue) {
-  runScript_('api_saveModuleAcademicConfig', [code, { includeInStudyPlan: !currentValue }]).then(function (res) {
-    if (!res.ok) { showToast_('error', 'Could not save: ' + res.error); return; }
-    loadPlannerData();
+  var newValue = !currentValue;
+  state.localIncludeOverrides[code] = newValue;
+  render();
+  runScript_('api_saveModuleAcademicConfig', [code, { includeInStudyPlan: newValue }]).then(function (res) {
+    if (!res.ok) {
+      showToast_('error', 'Could not save: ' + res.error);
+      delete state.localIncludeOverrides[code];
+      render();
+    }
   });
 }
 // v1.4.3 -- session-only, never sent to the backend until Generate is
