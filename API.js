@@ -384,6 +384,10 @@ function api_getPlannerData() {
         distinctionMark: rule ? num_(rule["Distinction mark"]) : 75,
         rulesVerified: !!(rule && rule["Rule status"] === "Verified"),
         afMethod: rule ? rule["AF calculation method"] : "UNKNOWN",
+        // v1.4.1 -- "Tutorial tests" / "Practicals" / "" (not yet chosen).
+        // The "+ Add Assessment" form's Item type choice locks to whichever
+        // is set here -- see AF_Components_v1.4.1_Migration.gs.
+        afItemType: rule ? (rule["AF item type"] || "") : "",
         generalNotes: rule ? rule["General notes"] : "No assessment framework supplied for this module yet.",
         // v1.3.1 -- Faculty Override Rule 2 exception + DCA enabled toggles.
         // Both default to false (Rule 2 ACTIVE, DCA OFF) for a module that
@@ -477,7 +481,9 @@ function api_getPlannerData() {
         mark: num_(r["Mark"]), max: num_(r["Maximum mark"]), pct: num_(r["Percentage"]),
         date: isoDate_(r["Date"]),
         written: r["Written"] === true, excused: r["Excused or excluded"] === true,
-        included: r["Included in AF"] === true, notes: r["Notes"]
+        included: r["Included in AF"] === true, notes: r["Notes"],
+        // v1.4.1 -- blank until AF_Components_v1.4.1_Migration.gs has run.
+        itemType: r["Item type"] || "", weight: num_(r["Weight"])
       };
     });
 
@@ -1139,6 +1145,19 @@ function api_addMarkEntry(moduleCode, moduleName, form) {
       sheet.getRange(foundRow, col_(map, "Excused or excluded")).setValue(excusedVal);
       sheet.getRange(foundRow, col_(map, "Included in AF")).setValue(!!form.includeInAf);
       if (map["Notes"]) sheet.getRange(foundRow, col_(map, "Notes")).setValue(notesVal);
+      // v1.4.1 -- Item type / Weight, both optional, both no-ops if the
+      // AF_Components_v1.4.1_Migration.gs columns haven't been added yet
+      // (never throws just because that migration hasn't run).
+      if (map["Item type"] && VALID_AF_ITEM_TYPES.indexOf(form.itemType) !== -1) {
+        sheet.getRange(foundRow, col_(map, "Item type")).setValue(form.itemType);
+      }
+      if (map["Weight"]) {
+        if (form.weight === "" || form.weight === null || typeof form.weight === "undefined") {
+          sheet.getRange(foundRow, col_(map, "Weight")).setValue("");
+        } else {
+          sheet.getRange(foundRow, col_(map, "Weight")).setValue(requireFiniteNumber_(form.weight, "Weight", 0, null));
+        }
+      }
       // Percentage column is a pre-existing formula (=Mark/Maximum*100) — never overwritten here.
       logAutomation_("Mark entered (AF)", verifiedModuleName + " — " + name, "Saved", mark + "/" + max);
       var afItemId = sheet.getRange(foundRow, col_(map, "AF Item ID")).getValue();

@@ -168,7 +168,9 @@ var WEEKDAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 var GUIDE_FALLBACK = [
   { title: 'Working offline', body: 'This page could not reach the workbook. Reload once you have a connection — nothing you typed elsewhere has been lost, the workbook is always the source of truth.' }
 ];
-var EMPTY_MARK_FORM = { type: 'AF', name: '', mark: '', max: '', date: '', includeInAf: true, written: true, excused: false, notes: '', error: '', saving: false };
+var EMPTY_MARK_FORM = { type: 'AF', name: '', mark: '', max: '', date: '', includeInAf: true, written: true, excused: false, notes: '', error: '', saving: false, itemType: '', weight: '' };
+// v1.4.1 -- mirrors VALID_AF_ITEM_TYPES in AF_Components_v1.4.1_Migration.js.
+var VALID_AF_ITEM_TYPES_LIST = ['Tutorial test', 'Practical'];
 
 // ---- v1.2.0 ACADEMIC WORKFLOW RELEASE -- shared lookup tables for the new
 // Study Planner / Revision Tracker / Resources / Attendance / Module
@@ -1074,16 +1076,25 @@ function toggleMarkIncludeInAf(code) { var f = getMarkForm_(code); setMarkField_
 function toggleMarkWritten(code) { var f = getMarkForm_(code); setMarkField_(code, 'written', !f.written); render(); }
 function toggleMarkExcused(code) { var f = getMarkForm_(code); setMarkField_(code, 'excused', !f.excused); render(); }
 
-function saveMarkEntry(code, moduleName) {
+function saveMarkEntry(code, moduleName, moduleAfItemType) {
   var form = getMarkForm_(code);
   if (form.saving) return; // double-submit guard
   var mark = parseFloat(form.mark), max = parseFloat(form.max);
   if (form.type === 'AF' && !(form.name || '').trim()) { setMarkField_(code, 'error', 'Give this assessment a name (e.g. "Tutorial Test 4").'); render(); return; }
   if (!Number.isFinite(mark) || !Number.isFinite(max) || max <= 0) { setMarkField_(code, 'error', 'Enter a valid mark and maximum mark.'); render(); return; }
   if (mark < 0 || mark > max * 1.05) { setMarkField_(code, 'error', 'Mark should be between 0 and the maximum.'); render(); return; }
+  // v1.4.1 -- Item type: locked to the module's own AF item type when set
+  // (markCardFormHtml_'s disabled <select> never fires onchange, so
+  // form.itemType alone can't be trusted for a locked module -- resolve it
+  // here instead), otherwise whatever was chosen in the dropdown, which
+  // must be non-blank for an AF entry.
+  var lockedItemType = moduleAfItemType === 'Tutorial tests' ? 'Tutorial test' : moduleAfItemType === 'Practicals' ? 'Practical' : null;
+  var itemType = lockedItemType || form.itemType;
+  if (form.type === 'AF' && !itemType) { setMarkField_(code, 'error', 'Choose an item type (Tutorial test or Practical).'); render(); return; }
+  var payload = Object.assign({}, form, { itemType: itemType });
   state.markForms[code] = Object.assign({}, form, { saving: true, error: '' });
   render();
-  runScript_('api_addMarkEntry', [code, moduleName, form]).then(function (res) {
+  runScript_('api_addMarkEntry', [code, moduleName, payload]).then(function (res) {
     if (!res.ok) {
       state.markForms[code] = Object.assign({}, form, { saving: false, error: res.error });
       showToast_('error', 'Could not save mark: ' + res.error);
@@ -1646,7 +1657,8 @@ function computeViewModel() {
     var a1Entered = typeof mt.a1 === 'number';
     var common = {
       code: m.code, formOpen: formOpen, form: Object.assign({}, form, { pct: livePct }), recentAf: recentAf, hasRecentAf: recentAf.length > 0,
-      formToggleLabel: formOpen ? '✕ Cancel' : '+ Add Assessment', a1Entered: a1Entered
+      formToggleLabel: formOpen ? '✕ Cancel' : '+ Add Assessment', a1Entered: a1Entered,
+      afItemType: m.afItemType || '' // v1.4.1 -- "Tutorial tests"/"Practicals"/"" -- locks markCardFormHtml_'s Item type choice
     };
     if (isMissing) return Object.assign({ module: m.short, color: m.color, status: 'Missing', statusBg: '#F7E2D8', statusColor: '#8F3B23', hasData: false, missing: true, editableAf: false }, common);
     var editableAf = m.code === ELECTRO_CODE;
@@ -1666,32 +1678,37 @@ function computeViewModel() {
     return { module: m.name, af: m.afWeight != null ? Math.round(m.afWeight * 100) + '%' : 'Unknown', a1: m.a1Weight != null ? Math.round(m.a1Weight * 100) + '%' : 'Unknown', a2: m.a2Weight != null ? Math.round(m.a2Weight * 100) + '%' : 'Unknown', status: m.ruleStatus, statusBg: colors[0], statusColor: colors[1], note: m.generalNotes || '' };
   });
 
-  var afTemplateByCode = {};
-  afTemplateByCode['20753-154'] = [['Class Test 1', '6%'], ['Class Test 2', '6%'], ['Tutorial Tests', '3%']];
-  afTemplateByCode['38571-145'] = [['Class Test 1', '5%'], ['Class Test 2', '5%']];
-  afTemplateByCode['19712-143'] = [['Class Tests (avg)', '9%'], ['Tutorial Tests (avg)', '6%']];
-  afTemplateByCode[ELECTRO_CODE] = [['Combined AF (manual entry — internal split not yet confirmed)', 'Not yet confirmed']];
-  var afWrittenByKey = {}, afExcusedByKey = {};
-  raw.afComponents.forEach(function (item) {
-    var mod = byName[item.module];
-    if (!mod) return;
-    var key = mod.code + '__' + item.itemName;
-    afWrittenByKey[key] = item.written; afExcusedByKey[key] = item.excused;
-  });
-  var afGroups = Object.keys(afTemplateByCode).map(function (code) {
-    var mod = byCode[code];
-    if (!mod) return null;
+  // v1.4.1 -- afGroups is now a live view of "10 AF Components" itself,
+  // grouped by module, instead of a hardcoded per-module checklist template
+  // (afTemplateByCode, retired). Only ever shows real entries, which can
+  // now only ever be tagged Tutorial test or Practical (see
+  // markCardFormHtml_/api_addMarkEntry) -- so this screen naturally only
+  // shows those two categories, works for every active module (the old
+  // template covered 4 of 6), and each item's real Weight is shown instead
+  // of a fixed, made-up percentage label. Written/Excused toggles still go
+  // through api_setAfFlag, which already matches by (module, item name) --
+  // the exact same identity a real entry already has, so no backend change
+  // was needed for the toggles themselves.
+  var afGroups = modules.filter(function (m) { return m.active; }).map(function (m) {
+    var entries = raw.afComponents.filter(function (c) { return c.module === m.name && c.itemName; })
+      .sort(function (a, b) { return (a.date || '').localeCompare(b.date || '') || a.itemName.localeCompare(b.itemName); });
     return {
-      module: mod.short, color: mod.color,
-      items: afTemplateByCode[code].map(function (pair) {
-        var name = pair[0], weight = pair[1];
-        var key = code + '__' + name;
-        var written = (key in state.localAfWritten) ? state.localAfWritten[key] : !!afWrittenByKey[key];
-        var excused = (key in state.localAfExcused) ? state.localAfExcused[key] : !!afExcusedByKey[key];
-        return { name: name, weight: weight, key: key, moduleName: mod.name, writtenStyle: written ? CHECK_ON : CHECK_OFF, excusedStyle: excused ? CHECK_ON : CHECK_OFF };
+      module: m.short, color: m.color, moduleName: m.name, afItemType: m.afItemType || '',
+      items: entries.map(function (item) {
+        var key = m.code + '__' + item.itemName;
+        var written = (key in state.localAfWritten) ? state.localAfWritten[key] : !!item.written;
+        var excused = (key in state.localAfExcused) ? state.localAfExcused[key] : !!item.excused;
+        return {
+          name: item.itemName, itemType: item.itemType || '—',
+          weight: (typeof item.weight === 'number') ? item.weight : '—',
+          pct: (typeof item.pct === 'number') ? Math.round(item.pct * 10) / 10 + '%' : '—',
+          date: item.date ? formatLocalDateOnly_(item.date) : '',
+          included: item.included,
+          key: key, moduleName: m.name, writtenStyle: written ? CHECK_ON : CHECK_OFF, excusedStyle: excused ? CHECK_ON : CHECK_OFF
+        };
       })
     };
-  }).filter(Boolean);
+  });
 
   // v1.2.0 -- task-based Study Planner: group raw.studyTasks by session ID
   // once, here, so every session card below can just look up its own tasks
@@ -2485,9 +2502,28 @@ function markCardFormHtml_(m) {
     var labels = { AF: 'AF item (class/tutorial test)', A1: 'A1', A2: 'A2', A3: 'A3' };
     return '<option value="' + t + '"' + (f.type === t ? ' selected' : '') + '>' + labels[t] + '</option>';
   }).join('');
+  // v1.4.1 -- Item type is locked to whichever single option matches this
+  // module's "AF item type" (04 Module Rules), if set; otherwise both
+  // Tutorial test / Practical are offered and a choice is required. Weight
+  // is always optional, for every module -- blank behaves exactly like
+  // today (plain average), see AF_Components_v1.4.1_Migration.js.
+  var itemTypeBlock = '';
+  if (f.type === 'AF') {
+    var lockedTo = m.afItemType === 'Tutorial tests' ? 'Tutorial test' : m.afItemType === 'Practicals' ? 'Practical' : null;
+    var itemTypeChoices = lockedTo ? [lockedTo] : VALID_AF_ITEM_TYPES_LIST;
+    var itemTypeSelected = lockedTo || f.itemType;
+    var itemTypeOptions = (lockedTo ? [] : [['', 'Item type…']]).concat(itemTypeChoices.map(function (t) { return [t, t]; }))
+      .map(function (pair) { return '<option value="' + pair[0] + '"' + (itemTypeSelected === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    itemTypeBlock = '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<select ' + (lockedTo ? 'disabled' : ('onchange="' + hv_('setMarkField_', [m.code, 'itemType']) + '"')) + ' style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;' + (lockedTo ? 'opacity:0.7;' : '') + '">' + itemTypeOptions + '</select>' +
+      '<input type="number" min="0" step="0.1" value="' + escAttr(f.weight) + '" oninput="' + hv_('setMarkField_', [m.code, 'weight']) + '" placeholder="Weight (optional)" title="Optional -- how much this test counts relative to others. Blank = counts the same as an ordinary test." style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
+      '</div>' +
+      (lockedTo ? '' : '<div style="font-size:11px;color:#8A7A68;">Set this module\'s AF item type in 04 Module Rules to lock this choice.</div>');
+  }
   return '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">' +
     '<select onchange="' + hv_('setMarkTypeSel', [m.code]) + '" style="padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;">' + typeOptions + '</select>' +
     '<input value="' + escAttr(f.name) + '" oninput="' + hv_('setMarkField_', [m.code, 'name']) + '" placeholder="Assessment name (e.g. Tutorial Test 4)" style="padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
+    itemTypeBlock +
     '<div style="display:flex;gap:8px;align-items:center;">' +
     '<input type="number" value="' + escAttr(f.mark) + '" oninput="' + hv_('setMarkFieldLive_', [m.code, 'mark']) + '" placeholder="Mark" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
     '<input type="number" value="' + escAttr(f.max) + '" oninput="' + hv_('setMarkFieldLive_', [m.code, 'max']) + '" placeholder="Max" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
@@ -2502,7 +2538,7 @@ function markCardFormHtml_(m) {
     '</div>' +
     (f.error ? '<div style="font-size:12px;color:#8F3B23;background:#F7E2D8;border-radius:8px;padding:8px 10px;">' + esc(f.error) + '</div>' : '') +
     '<div style="display:flex;gap:8px;">' +
-    '<div class="ep-clickable" onclick="' + h_('saveMarkEntry', [m.code, m.module]) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;' + (f.saving ? 'opacity:0.6;pointer-events:none;' : '') + '">' + (f.saving ? 'Saving…' : 'Save') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('saveMarkEntry', [m.code, m.module, m.afItemType]) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;' + (f.saving ? 'opacity:0.6;pointer-events:none;' : '') + '">' + (f.saving ? 'Saving…' : 'Save') + '</div>' +
     '<div class="ep-clickable" onclick="' + h_('toggleMarkForm', [m.code]) + '" style="flex:1;text-align:center;background:#F3E3D2;color:#3B332B;font-weight:600;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;">Cancel</div>' +
     '</div></div>';
 }
@@ -2552,17 +2588,23 @@ function screenMarks_(vm) {
 
 function screenAf_(vm) {
   var groups = vm.afGroups.map(function (g) {
-    var items = g.items.map(function (i) {
-      return '<div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #F3E3D2;">' +
-        '<div style="flex:1;font-size:14px;font-weight:600;">' + esc(i.name) + '</div>' +
-        '<div style="font-size:13px;color:#8A7A68;width:70px;">' + esc(i.weight) + '</div>' +
+    var items = g.items.length ? g.items.map(function (i) {
+      return '<div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
+        '<div style="flex:1;min-width:140px;font-size:14px;font-weight:600;">' + esc(i.name) + '</div>' +
+        '<div style="font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:#F3E3D2;color:#3B332B;">' + esc(i.itemType) + '</div>' +
+        '<div style="font-size:12px;color:#8A7A68;width:70px;" title="Weight (blank = counts the same as an ordinary test)">Weight: ' + esc(i.weight) + '</div>' +
+        '<div style="font-size:12px;color:#8A7A68;width:60px;">' + esc(i.pct) + '</div>' +
+        '<div style="font-size:11px;color:#8A7A68;width:80px;">' + esc(i.date) + '</div>' +
+        '<div style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:20px;' + (i.included ? 'background:#E4F0E9;color:#3F7A5C;' : 'background:#F7E2D8;color:#8F3B23;') + '">' + (i.included ? 'Included' : 'Not included') + '</div>' +
         '<div class="ep-clickable" onclick="' + h_('toggleAfWritten', [i.key, i.moduleName, i.name]) + '" style="' + i.writtenStyle + '"></div>' +
-        '<div style="font-size:11.5px;color:#8A7A68;width:60px;">Written</div>' +
+        '<div style="font-size:11.5px;color:#8A7A68;width:55px;">Written</div>' +
         '<div class="ep-clickable" onclick="' + h_('toggleAfExcused', [i.key, i.moduleName, i.name]) + '" style="' + i.excusedStyle + '"></div>' +
-        '<div style="font-size:11.5px;color:#8A7A68;width:60px;">Excused</div></div>';
-    }).join('');
-    return '<div style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+        '<div style="font-size:11.5px;color:#8A7A68;width:55px;">Excused</div></div>';
+    }).join('') : '<div style="padding:14px 18px;font-size:12.5px;color:#8A7A68;">No AF entries yet for this module. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('setView', ['marks']) + '">Add one from Marks Tracker.</span></div>';
+    var itemTypeNote = g.afItemType ? '' : '<div style="font-size:11px;color:#8A7A68;margin-bottom:6px;">AF item type not yet set for this module — set it in "04 Module Rules" (Tutorial tests / Practicals).</div>';
+    return '<div style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
       '<div style="width:10px;height:10px;border-radius:3px;background:' + g.color + ';"></div><div style="font-weight:800;font-size:16px;">' + esc(g.module) + '</div></div>' +
+      itemTypeNote +
       '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;">' + items + '</div></div>';
   }).join('');
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">AF Components</div>' +
