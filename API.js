@@ -438,6 +438,13 @@ function api_getPlannerData() {
         // Marks_Intelligence_v1.3.1_Migration.gs has run and a value has
         // been entered.
         publishedFinalBeforeA3: r["Published Final (Before A3)"],
+        // v1.4.0 -- mirror of the field above for the AFTER-A3 case: a
+        // module that does not publish a raw A3 mark, only a new combined
+        // final percentage once A3 is marked. Read by
+        // mi_computeMarksIntelligence_ only (never by the Hidden A2
+        // inference engine, which is a before-A3 concern) -- see there for
+        // how it's folded into the Official Final Mark.
+        publishedFinalAfterA3: r["Published Final (After A3)"],
         // v1.3.1 (2nd pass) -- explicit, independent written/not-written/
         // excused/deferred status per assessment. A BLANK MARK MUST NOT BE
         // ASSUMED "not written" (spec correction) -- this is why a separate
@@ -768,6 +775,24 @@ function buildMonthGrid_() {
   var trailing = (7 - (days.length % 7)) % 7;
   for (var j = 0; j < trailing; j++) days.push({ num: "", events: [], isToday: "#F3E3D2", dim: "opacity:.4;" });
   return days;
+}
+
+// v1.4.0 -- Google Calendar pull-sync for the monthly view, lazy-loaded by
+// the frontend when the Calendar screen opens (same pattern as
+// api_getWeekTimetable / api_semDashboard) rather than folded into every
+// api_getPlannerData call, since it makes an external Calendar API request.
+// Read-only: never writes anything. See buildExternalCalendarEvents_ for
+// what "external" means here (excludes events this workbook itself created).
+function api_getExternalCalendarEvents() {
+  try {
+    var tz = TIMEZONE;
+    var today = new Date();
+    var year = Number(Utilities.formatDate(today, tz, "yyyy"));
+    var month = Number(Utilities.formatDate(today, tz, "M")); // 1-12
+    var monthStart = new Date(year, month - 1, 1);
+    var monthEndExclusive = new Date(year, month, 1);
+    return ok_(buildExternalCalendarEvents_(monthStart, monthEndExclusive));
+  } catch (e) { return fail_(e); }
 }
 
 // v1.1.12 master -- Feature 10 (Weekly Timetable preview). buildCurrentWeek_
@@ -1122,7 +1147,7 @@ function api_setPublishedFinalBeforeA3(moduleCode, value) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map["Published Final (Before A3)"]) {
       throw new Error('"Published Final (Before A3)" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
     }
@@ -1135,6 +1160,39 @@ function api_setPublishedFinalBeforeA3(moduleCode, value) {
     mtSheet.getRange(mtRow, col_(map, "Published Final (Before A3)")).setValue(pct);
     logAutomation_("Published Final (Before A3) entered", moduleCode, "Saved", pct + "%");
     return ok_({ row: mtRow, pct: pct });
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
+// ------------------------------------------------------------------
+// v1.4.0 -- "Published Final (After A3)". Mirrors
+// api_setPublishedFinalBeforeA3 exactly, one column over: for a module that
+// does not publish a raw A3 mark, only a new combined final percentage once
+// A3 is marked. Read by mi_computeMarksIntelligence_ as an alternative
+// candidate for the Official Final Mark (the higher of the computed value
+// and this one wins) -- never by Hidden A2 inference, which only reads the
+// Before-A3 field. Writing here never touches AF, A1, A2, A3, or any other
+// column.
+// ------------------------------------------------------------------
+function api_setPublishedFinalAfterA3(moduleCode, value) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var mtRow = findMarksTrackerRow_(moduleCode);
+    if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
+    var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
+    if (!map["Published Final (After A3)"]) {
+      throw new Error('"Published Final (After A3)" column not found -- run Marks_Intelligence_v1.4.0_Migration.gs first.');
+    }
+    if (value === "" || value === null || typeof value === "undefined") {
+      mtSheet.getRange(mtRow, col_(map, "Published Final (After A3)")).setValue("");
+      logAutomation_("Published Final (After A3) cleared", moduleCode, "Cleared", "");
+      return ok_({ row: mtRow, pct: null });
+    }
+    var pctAfter = requireFiniteNumber_(value, "Published Final (After A3)", 0, 100);
+    mtSheet.getRange(mtRow, col_(map, "Published Final (After A3)")).setValue(pctAfter);
+    logAutomation_("Published Final (After A3) entered", moduleCode, "Saved", pctAfter + "%");
+    return ok_({ row: mtRow, pct: pctAfter });
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
@@ -1161,7 +1219,7 @@ function api_setAssessmentStatus(moduleCode, assessment, status) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map[header]) throw new Error('"' + header + '" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
 
     if (status === "" || status === null || typeof status === "undefined") {
@@ -1197,7 +1255,7 @@ function api_setDcaMark(moduleCode, value) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map["DCA mark (%)"]) throw new Error('"DCA mark (%)" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
 
     if (value === "" || value === null || typeof value === "undefined") {
@@ -1503,7 +1561,7 @@ function api_archiveSemester() {
     var mt = ss.getSheetByName(MARKS_TRACKER_SHEET);
     var archive = ss.getSheetByName(ARCHIVE_SHEET);
     var semesterName = getSetting_("Semester name") || "Unknown semester";
-    var mtMap = getColMap_(mt);
+    var mtMap = getColMap_(mt, MARKS_TRACKER_HEADER_ROW);
     var lastRow = mt.getLastRow();
     var archiveRow = Math.max(archive.getLastRow() + 1, 13); // below 17 Archive's header block (row 12)
     var count = 0;
@@ -4631,6 +4689,28 @@ function mi_computeMarksIntelligence_(module, marksRow, passMark, distinctionMar
   var pipeline = mi_computeFmpAndOfficial_(module, { af: af, a1: a1, a2: a2Value, a3: a3 }, { a1Status: a1Status, a2Status: a2Status, a3Status: a3Status }, dcaMark);
   reasons = reasons.concat(pipeline.reasons);
 
+  // v1.4.0 -- "Published Final (After A3)": a module that publishes a new
+  // combined final percentage after A3 instead of a raw A3 mark. Folded in
+  // as an alternative candidate for the Official Final Mark, never a
+  // replacement of the computed pipeline outright -- the higher of the two
+  // wins, so a real A3 result (raw or published) can only ever raise the
+  // mark, exactly like every other FMp route (FM1/FM2/FM3 already share
+  // this same "best route wins" property).
+  var publishedAfterA3 = pctToNumber_(marksRow ? marksRow.publishedFinalAfterA3 : null);
+  if (typeof publishedAfterA3 === "number") {
+    if (typeof pipeline.officialFinalMark === "number") {
+      if (publishedAfterA3 > pipeline.officialFinalMark) {
+        reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% is higher than the computed Official Final Mark of " + pipeline.officialFinalMark + "% -- the published figure is used (a real A3 result can only raise your mark, never lower it).");
+        pipeline.officialFinalMark = publishedAfterA3;
+      } else {
+        reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% entered, but the computed Official Final Mark of " + pipeline.officialFinalMark + "% is already at least as high -- the computed value is kept.");
+      }
+    } else {
+      reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% used directly as the Official Final Mark (not enough of A1/A2/A3 recorded individually to compute FM1/FM2/FM3).");
+      pipeline.officialFinalMark = publishedAfterA3;
+    }
+  }
+
   function statusFor(target, label) {
     if (typeof target !== "number") return { label: label, status: "Insufficient data", reasons: ["No " + label.toLowerCase() + " mark is configured for this module."] };
     if (typeof pipeline.officialFinalMark === "number") {
@@ -4672,6 +4752,7 @@ function mi_computeMarksIntelligence_(module, marksRow, passMark, distinctionMar
     a1Status: a1Status, a2Status: a2Status, a3Status: a3Status,
     a2Source: a2Source, inferredA2: (a2Source === "estimated") ? inferredA2 : null,
     publishedFinalBeforeA3: pctToNumber_(marksRow ? marksRow.publishedFinalBeforeA3 : null),
+    publishedFinalAfterA3: publishedAfterA3,
     dcaMarkOnFile: dcaMark, subminimumMode: module.subminimumMode || "",
     ruleStatus: module.ruleStatus || "", a3Verified: weights.a3Verified,
     reasons: reasons, warnings: pipeline.warnings || []

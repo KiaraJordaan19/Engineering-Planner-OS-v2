@@ -62,6 +62,7 @@ function onOpen() {
     .addItem("Duplicate Semester (new file copy)", "duplicateSemester")
     .addSeparator()
     .addItem("Validate Workbook", "validateWorkbook")
+    .addItem("Check Migration Status", "runMigrationStatusCheck")
     .addItem("Delete Calendar Event for Selected Row", "deleteCalendarEventForSelectedRow")
     .addItem("Open Setup Guide", "openSetupGuide")
     .addToUi();
@@ -172,12 +173,22 @@ function sendSmartNotifications() {
 // ============================================================
 var HEADER_ROW = 4;
 
-function getColMap_(sheet) {  var lastColumn = sheet.getLastColumn();
+// `headerRow` is optional and defaults to the workbook-wide HEADER_ROW (4) --
+// every sheet uses that except "11 Marks Tracker", whose real header row is
+// MARKS_TRACKER_HEADER_ROW (6, extra title/note rows above it). Callers
+// working with Marks Tracker MUST pass MARKS_TRACKER_HEADER_ROW explicitly;
+// omitting it there silently maps almost nothing (row 4 has one unrelated
+// note in it, not real headers) and every col_() lookup after it throws
+// "column not found" -- this was happening in api_setPublishedFinalBeforeA3,
+// api_setAssessmentStatus, api_setDcaMark, and both archiveSemester
+// functions until this fix.
+function getColMap_(sheet, headerRow) {  var lastColumn = sheet.getLastColumn();
   if (lastColumn < 1) {
     return {};
   }
   var lastCol = sheet.getLastColumn();
-  var headers = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0];
+  var row = headerRow || HEADER_ROW;
+  var headers = sheet.getRange(row, 1, 1, lastCol).getValues()[0];
   var map = {};
   for (var i = 0; i < headers.length; i++) {
     var h = (headers[i] || "").toString().trim();
@@ -228,6 +239,62 @@ function getTargetCalendar_() {
       "'. Use the exact Calendar ID in 02 Settings instead (Calendar Settings > Integrate calendar).");
   }
   return byName[0];
+}
+
+// ============================================================
+// v1.4.0 -- GOOGLE CALENDAR PULL-SYNC (monthly view only)
+// ============================================================
+// Every sync elsewhere in this file is one-way, Sheets -> Google Calendar
+// (see the file header). This is the one read path: it lets the monthly
+// calendar screen show events that exist ON the configured Google Calendar
+// but were never created by this workbook -- e.g. something added directly
+// in Google Calendar, or via Academic Inbox -> "Send to Calendar" outside
+// the normal Assignments/Assessments flow. Events already represented by an
+// Assignments/Assessments/Study Planner row (tracked via that row's own
+// "Calendar Event ID") are excluded so nothing is shown twice.
+function getTrackedCalendarEventIds_() {
+  var ids = {};
+  [ASSIGNMENTS_SHEET, ASSESSMENTS_SHEET, STUDY_SHEET].forEach(function (sheetName) {
+    var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+    if (!sheet) return;
+    var map = getColMap_(sheet);
+    if (!map["Calendar Event ID"]) return;
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= HEADER_ROW) return;
+    var vals = sheet.getRange(HEADER_ROW + 1, map["Calendar Event ID"], lastRow - HEADER_ROW, 1).getValues();
+    vals.forEach(function (r) { if (r[0]) ids[r[0]] = true; });
+  });
+  return ids;
+}
+
+/**
+ * Read-only. `monthStart`/`monthEndExclusive` bound one calendar month.
+ * Returns { events: [{id,title,date,allDay}], reason } -- `reason` is a
+ * human-readable explanation (never a thrown error) when nothing could be
+ * fetched, e.g. no calendar configured yet, so the monthly view can show a
+ * quiet inline message instead of failing the whole screen load.
+ */
+function buildExternalCalendarEvents_(monthStart, monthEndExclusive) {
+  var idOrName = getSetting_("Planner Calendar ID (read/write)");
+  if (!idOrName) return { events: [], reason: "No Google Calendar configured yet (\"Planner Calendar ID (read/write)\" in 02 Settings)." };
+  var calendar;
+  try { calendar = getTargetCalendar_(); } catch (e) { return { events: [], reason: e.message }; }
+
+  var tracked = getTrackedCalendarEventIds_();
+  var calEvents;
+  try { calEvents = calendar.getEvents(monthStart, monthEndExclusive); } catch (e) { return { events: [], reason: "Could not read from Google Calendar: " + e.message }; }
+
+  var out = [];
+  calEvents.forEach(function (ev) {
+    var id = ev.getId();
+    if (tracked[id]) return; // already shown via its own Assignments/Assessments/Study Planner row
+    out.push({
+      id: id, title: ev.getTitle(),
+      date: Utilities.formatDate(ev.getStartTime(), TIMEZONE, "yyyy-MM-dd"),
+      allDay: ev.isAllDayEvent()
+    });
+  });
+  return { events: out, reason: null };
 }
 
 function checkTimezones_() {
@@ -985,12 +1052,12 @@ function archiveSemester() {
   var mt = ss.getSheetByName("11 Marks Tracker");
   var archive = ss.getSheetByName("17 Archive");
   var semesterName = getSetting_("Semester name") || "Unknown semester";
-  var mtMap = getColMap_(mt);
+  var mtMap = getColMap_(mt, MARKS_TRACKER_HEADER_ROW);
   var lastRow = mt.getLastRow();
   var archiveRow = archive.getLastRow() + 1;
   if (archiveRow < 8) archiveRow = 8; // below the archive sheet's own header block
 
-  for (var row = HEADER_ROW + 1; row <= lastRow; row++) {
+  for (var row = MARKS_TRACKER_HEADER_ROW + 1; row <= lastRow; row++) {
     var moduleName = mt.getRange(row, col_(mtMap, "Module")).getValue();
     if (!moduleName) continue;
     var finalMark = mt.getRange(row, col_(mtMap, "Final / provisional (after A3)")).getValue();
@@ -1314,7 +1381,19 @@ function buildPrioritizedStudySuggestions_(weekAnchorDate, priorities, revisionT
       });
     }
   }
-  return { mondayIso: Utilities.formatDate(monday, TIMEZONE, "yyyy-MM-dd"), suggestions: out };
+  // Distinguish WHY nothing came back -- "no eligible module" (every module
+  // is Rules Incomplete / Insufficient data, so the candidate queue itself
+  // was empty) vs. "eligible modules exist but this week's slots are all
+  // busy or already covered" -- rather than one generic empty state. This
+  // is exactly the gap that made "Generate this week's plan" look silently
+  // broken when every module still had unverified rules.
+  var emptyReason = null;
+  if (!out.length) {
+    emptyReason = queue.length
+      ? "No free slots found for that week — fully booked by classes, or already covered by existing sessions."
+      : "No eligible module for suggestions yet — every module's Rule status is still Missing/Partially verified, or there isn't enough AF/A1/A2/A3 data yet. Verify a module's rules in \"04 Module Rules\" to start getting suggestions for it.";
+  }
+  return { mondayIso: Utilities.formatDate(monday, TIMEZONE, "yyyy-MM-dd"), suggestions: out, emptyReason: emptyReason };
 }
 
 /**

@@ -282,6 +282,8 @@ var state = {
   // Nothing here is persisted except through the explicit Save action on
   // Published Final -- the Simulator is entirely read-only/on-demand.
   publishedFinalInput: {}, publishedFinalSaving: {},
+  // v1.4.0 -- mirror of the two fields above for "Published Final (After A3)".
+  publishedFinalAfterInput: {}, publishedFinalAfterSaving: {},
   whatIfInput: {}, whatIfResult: {}, whatIfLoading: {}, whatIfError: {}, whatIfOpen: {},
   // v1.3.1 2nd correction pass -- per-module, per-assessment (a1/a2/a3)
   // explicit status dropdown state (Written/Not written/Excused/Deferred),
@@ -325,6 +327,10 @@ var state = {
   newTaskTypeBySession: {},     // sessionId -> in-progress "add task" type field
   suggestionsPreview: null,     // null | { mondayIso, suggestions: [{module,topic,date,hour,duration,studyType,startTimeIso}] }
   suggestionsLoading: false,
+  suggestionsWeekOffset: 0,     // 0 = this week, 1/2/3 = that many weeks ahead -- api_generateStudySuggestions already accepts a week anchor, this just lets the UI pick one
+  // v1.4.0 -- lazy-loaded (like the Weekly screen's own preview) the first
+  // time the Calendar screen opens. null = not fetched yet this session.
+  externalCalendarEvents: null, externalCalendarLoading: false, externalCalendarReason: null,
 
   resourceFormOpen: false,
   resourceForm: null,
@@ -632,6 +638,19 @@ function setView(id) {
   // data (e.g. Study Suggestions) rather than folding it into the single
   // api_getPlannerData payload every screen already shares.
   if (id === 'semester' && !state.semData && !state.semLoading) loadSemesterDashboard_();
+  // v1.4.0 -- same lazy-load pattern, for events pulled live from Google
+  // Calendar (see api_getExternalCalendarEvents / buildExternalCalendarEvents_).
+  if (id === 'calendar' && !state.externalCalendarEvents && !state.externalCalendarLoading) loadExternalCalendarEvents_();
+}
+function loadExternalCalendarEvents_() {
+  state.externalCalendarLoading = true; render();
+  runScript_('api_getExternalCalendarEvents', []).then(function (res) {
+    state.externalCalendarLoading = false;
+    if (!res.ok) { state.externalCalendarReason = 'Could not load Google Calendar events: ' + res.error; render(); return; }
+    state.externalCalendarEvents = res.data.events;
+    state.externalCalendarReason = res.data.reason;
+    render();
+  });
 }
 
 // ---- Academic Inbox ----
@@ -1288,6 +1307,7 @@ function emptyViewModel_(message) {
     navGroups: [], allNavFlat: [], modules: [], legendModules: [],
     todayClasses: [], todayTutorials: [], nextAssessmentLabel: null, hoursByModule: [], moduleHealth: [], phases: [],
     weekdayLabels: WEEKDAY_LABELS, calendarDays: [], weekDays: [],
+    externalCalendarLoading: false, externalCalendarReason: null,
     weekDaysForDisplay: [], weeklyRangeLabel: '', weeklyIsCurrentWeek: true, weeklyAllEmpty: false, weeklyLoading: false, weeklyFirstTeachingWeekIso: null,
     calendarMonthLabel: state.booted ? 'Unavailable' : 'Loading…', calendarPhaseLabel: '',
     moduleFilterChips: [], agendaItems: [], countdowns: [],
@@ -1299,7 +1319,8 @@ function emptyViewModel_(message) {
     // v1.2.0 -- defaults so a pre-boot/error render never throws reading these.
     studySessionFormOpen: false, studySessionForm: null, studySessionEditingId: null,
     independentStudyFormOpen: false, independentStudyForm: null,
-    suggestionsPreview: null, suggestionsLoading: false,
+    suggestionsPreview: null, suggestionsLoading: false, suggestionsWeekOffset: 0,
+    externalCalendarEvents: null, externalCalendarLoading: false, externalCalendarReason: null,
     resourceFormOpen: false, resourceForm: null, resourceEditingId: null,
     revisionFormOpen: false, revisionForm: null, revisionEditForm: null,
     moduleConfigFormOpenByCode: {}, moduleConfigForms: {},
@@ -1314,6 +1335,7 @@ function emptyViewModel_(message) {
     // v1.3.1 Marks Intelligence Completion -- defaults so a pre-boot/error
     // render never throws reading these.
     publishedFinalInput: {}, publishedFinalSaving: {},
+    publishedFinalAfterInput: {}, publishedFinalAfterSaving: {},
     whatIfInput: {}, whatIfResult: {}, whatIfLoading: {}, whatIfError: {}, whatIfOpen: {},
     // v1.3.1 2nd correction pass -- defaults so a pre-boot/error render never throws reading these.
     assessmentStatusInput: {}, assessmentStatusSaving: {}, dcaMarkInput: {}, dcaMarkSaving: {},
@@ -1368,15 +1390,29 @@ function computeViewModel() {
   var legendModules = modules.map(function (m) { return { name: m.short, color: m.color }; });
 
   var filterActive = state.calendarFilter;
+  // v1.4.0 -- fold in events pulled live from Google Calendar (see
+  // loadExternalCalendarEvents_) that this workbook didn't itself create --
+  // e.g. added directly in Google Calendar. Matched purely by day-of-month
+  // since both raw.calendarDays and api_getExternalCalendarEvents are
+  // always the current month. Given a distinct look (dashed border, 📅
+  // prefix) so they read as "from Google Calendar", not a planner item.
+  var externalByDayNum = {};
+  (state.externalCalendarEvents || []).forEach(function (ev) {
+    var dayNum = parseInt((ev.date || '').split('-')[2], 10);
+    if (!dayNum) return;
+    (externalByDayNum[dayNum] = externalByDayNum[dayNum] || []).push(ev);
+  });
   var calendarDays = raw.calendarDays.map(function (day) {
-    return Object.assign({}, day, {
-      events: day.events.map(function (ev) {
-        if (!filterActive) return ev;
-        var mod = byId[filterActive];
-        var matches = mod && ev.label && ev.label.indexOf(mod.name) === 0;
-        return matches ? ev : Object.assign({}, ev, { color: MUTED_COLOR });
-      })
+    var ownEvents = day.events.map(function (ev) {
+      if (!filterActive) return ev;
+      var mod = byId[filterActive];
+      var matches = mod && ev.label && ev.label.indexOf(mod.name) === 0;
+      return matches ? ev : Object.assign({}, ev, { color: MUTED_COLOR });
     });
+    var externalEvents = (day.num && externalByDayNum[day.num] || []).map(function (ev) {
+      return { label: '📅 ' + ev.title, color: MUTED_COLOR, external: true };
+    });
+    return Object.assign({}, day, { events: ownEvents.concat(externalEvents) });
   });
   var weekDays = raw.weekDays;
 
@@ -1788,6 +1824,7 @@ function computeViewModel() {
     todayClasses: todayClasses, todayTutorials: todayTutorials, countdowns: countdowns, nextAssessmentLabel: nextAssessmentLabel,
     hoursByModule: hoursByModule, totalHours: Math.round(totalHours * 10) / 10, moduleHealth: moduleHealth, phases: phases, todayStudyBlock: todayStudyBlock,
     weekdayLabels: WEEKDAY_LABELS, calendarDays: calendarDays, weekDays: weekDays,
+    externalCalendarLoading: state.externalCalendarLoading, externalCalendarReason: state.externalCalendarReason,
     weekDaysForDisplay: weeklyView.weekDays,
     weeklyRangeLabel: formatWeekRangeLabel_(weeklyView.mondayIso, weeklyView.fridayIso),
     weeklyIsCurrentWeek: !!weeklyView.isCurrentWeek,
@@ -1805,6 +1842,7 @@ function computeViewModel() {
     studySessionFormOpen: state.studySessionFormOpen, studySessionForm: state.studySessionForm, studySessionEditingId: state.studySessionEditingId,
     independentStudyFormOpen: state.independentStudyFormOpen, independentStudyForm: state.independentStudyForm,
     suggestionsPreview: state.suggestionsPreview, suggestionsLoading: state.suggestionsLoading,
+    suggestionsWeekOffset: state.suggestionsWeekOffset,
     resourceFormOpen: state.resourceFormOpen, resourceForm: state.resourceForm, resourceEditingId: state.resourceEditingId,
     revisionFormOpen: state.revisionFormOpen, revisionForm: state.revisionForm, revisionEditForm: state.revisionEditForm,
     moduleConfigFormOpenByCode: state.moduleConfigFormOpenByCode, moduleConfigForms: state.moduleConfigForms,
@@ -1835,13 +1873,17 @@ function computeViewModel() {
     // input field below can default to what's already saved.
     marksIntelligence: (raw.marksIntelligence || []).map(function (mi) {
       var mt = (raw.marksTracker || []).filter(function (r) { return r.module === mi.name; })[0];
-      return Object.assign({}, mi, { publishedFinalBeforeA3: mt ? mt.publishedFinalBeforeA3 : null });
+      return Object.assign({}, mi, {
+        publishedFinalBeforeA3: mt ? mt.publishedFinalBeforeA3 : null,
+        publishedFinalAfterA3: mt ? mt.publishedFinalAfterA3 : null
+      });
     }),
     a3CustomTargetInput: state.a3CustomTargetInput, a3CustomResult: state.a3CustomResult,
     a3CustomLoading: state.a3CustomLoading, a3CustomError: state.a3CustomError,
     marksIntelligenceExpanded: state.marksIntelligenceExpanded,
     // v1.3.1 Marks Intelligence Completion -- pure local UI state pass-through.
     publishedFinalInput: state.publishedFinalInput, publishedFinalSaving: state.publishedFinalSaving,
+    publishedFinalAfterInput: state.publishedFinalAfterInput, publishedFinalAfterSaving: state.publishedFinalAfterSaving,
     whatIfInput: state.whatIfInput, whatIfResult: state.whatIfResult, whatIfLoading: state.whatIfLoading,
     whatIfError: state.whatIfError, whatIfOpen: state.whatIfOpen,
     // v1.3.1 2nd correction pass -- pure local UI state pass-through.
@@ -2172,8 +2214,14 @@ function screenCalendar_(vm) {
       '<div style="font-size:11px;font-weight:700;color:#B24B2E;">' + esc(ag.daysLabel) + '</div></div>';
   }).join('') : '<div style="font-size:13px;color:#8A7A68;">Nothing due in the next 14 days.</div>';
 
+  var externalBanner = vm.externalCalendarLoading
+    ? '<div style="font-size:12px;color:#8A7A68;margin-bottom:10px;">Checking Google Calendar for events added outside the planner… <span class="ep-spin" style="display:inline-block;">⟳</span></div>'
+    : (vm.externalCalendarReason
+      ? '<div style="font-size:12px;color:#8A7A68;margin-bottom:10px;">' + esc(vm.externalCalendarReason) + '</div>'
+      : '<div style="font-size:11px;color:#8A7A68;margin-bottom:10px;">📅 = added directly in Google Calendar, not by the planner. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('loadExternalCalendarEvents_', []) + '">Refresh</span></div>');
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">' + esc(vm.calendarMonthLabel) + '</div>' +
-    '<div style="font-size:14px;color:#8A7A68;margin-bottom:18px;">' + esc(vm.calendarPhaseLabel) + '</div>' +
+    '<div style="font-size:14px;color:#8A7A68;margin-bottom:6px;">' + esc(vm.calendarPhaseLabel) + '</div>' +
+    externalBanner +
     '<div style="display:flex;gap:20px;align-items:flex-start;">' +
     '<div style="width:220px;flex-shrink:0;background:#FDF6F0;border:1px solid #F0DCC8;border-radius:16px;padding:16px;">' +
     '<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#B24B2E;margin-bottom:8px;">LEGEND</div>' + legend +
@@ -2496,7 +2544,7 @@ function suggestionsPreviewHtml_(vm) {
   var p = vm.suggestionsPreview;
   if (!p) return '';
   if (!p.suggestions.length) {
-    return '<div style="background:#F9EFE3;border-radius:12px;padding:14px 16px;font-size:13px;color:#8A7A68;margin-bottom:20px;">No free slots found for that week — fully booked by classes, or already covered by existing sessions. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('closeSuggestions_', []) + '">Dismiss</span></div>';
+    return '<div style="background:#F9EFE3;border-radius:12px;padding:14px 16px;font-size:13px;color:#8A7A68;margin-bottom:20px;">' + esc(p.emptyReason || 'No free slots found for that week — fully booked by classes, or already covered by existing sessions.') + ' <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('closeSuggestions_', []) + '">Dismiss</span></div>';
   }
   var moduleOptionsFor = function (chosen) {
     return '<option value="">Module…</option>' + vm.modules.map(function (m) {
@@ -2588,7 +2636,13 @@ function screenStudy_(vm) {
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">' +
     '<div class="ep-clickable" onclick="' + h_('openStudySessionForm_', [null]) + '" style="background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Add study session</div>' +
     '<div class="ep-clickable" onclick="' + h_('openIndependentStudyForm_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Log independent study</div>' +
-    '<div class="ep-clickable" onclick="' + h_('doGenerateSuggestions_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">' + (vm.suggestionsLoading ? 'Generating…' : 'Generate this week’s plan') + '</div>' +
+    '<select onchange="' + hv_('setSuggestionsWeekOffset_', []) + '" style="padding:10px 12px;border-radius:10px;border:1px solid #F0DCC8;background:#FDF6F0;font-weight:700;font-size:13.5px;font-family:\'Inter\',sans-serif;">' +
+    [0, 1, 2, 3].map(function (n) {
+      var label = n === 0 ? 'This week' : n === 1 ? 'Next week' : n + ' weeks ahead';
+      return '<option value="' + n + '"' + (vm.suggestionsWeekOffset === n ? ' selected' : '') + '>' + label + '</option>';
+    }).join('') +
+    '</select>' +
+    '<div class="ep-clickable" onclick="' + h_('doGenerateSuggestions_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">' + (vm.suggestionsLoading ? 'Generating…' : 'Generate plan') + '</div>' +
     '</div>' +
     (vm.studySessionFormOpen ? studySessionFormHtml_(vm) : '') +
     (vm.independentStudyFormOpen ? independentStudyFormHtml_(vm) : '') +
@@ -3003,6 +3057,25 @@ function publishedFinalInputHtml_(mi) {
     (typeof mi.publishedFinalBeforeA3 === 'number' ? '<div class="ep-clickable" onclick="' + h_('savePublishedFinal_', [mi.name, code, true]) + '" style="background:#F3E3D2;color:#3B332B;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">Clear</div>' : '') +
     '</div></div>';
 }
+// v1.4.0 -- mirror of publishedFinalInputHtml_ for the after-A3 case: a
+// module that publishes a new combined final percentage after A3 instead of
+// a raw A3 mark. See api_setPublishedFinalAfterA3 / mi_computeMarksIntelligence_
+// for how this feeds the Official Final Mark (the higher of the computed
+// value and this one wins, so it can only raise the mark).
+function publishedFinalAfterInputHtml_(mi) {
+  var code = mi.code;
+  var typed = state.publishedFinalAfterInput[code];
+  var val = (typed !== undefined) ? typed : (typeof mi.publishedFinalAfterA3 === 'number' ? mi.publishedFinalAfterA3 : '');
+  var saving = !!state.publishedFinalAfterSaving[code];
+  return '<div style="background:#F7EFE2;border:1px solid #E7C7A9;border-radius:12px;padding:12px 14px;margin-top:10px;">' +
+    '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.5px;color:#8A7A68;margin-bottom:4px;">PUBLISHED FINAL (AFTER A3)</div>' +
+    '<div style="font-size:11.5px;color:#8A7A68;margin-bottom:6px;">For a module that publishes a new combined final percentage after A3, instead of a raw A3 mark. Used as an alternative to the calculated Official Final Mark below — whichever is higher wins, so this can only raise your result, never lower it.</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+    '<input type="number" min="0" max="100" step="0.1" placeholder="e.g. 58.0" value="' + escAttr(val) + '" oninput="' + hv_('setPublishedFinalAfterInput_', [code]) + '" style="width:130px;padding:7px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:12.5px;font-family:\'Inter\',sans-serif;">' +
+    '<div class="ep-clickable" onclick="' + h_('savePublishedFinalAfter_', [mi.name, code]) + '" style="background:#DD7A56;color:#fff;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">' + (saving ? 'Saving…' : 'Save') + '</div>' +
+    (typeof mi.publishedFinalAfterA3 === 'number' ? '<div class="ep-clickable" onclick="' + h_('savePublishedFinalAfter_', [mi.name, code, true]) + '" style="background:#F3E3D2;color:#3B332B;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">Clear</div>' : '') +
+    '</div></div>';
+}
 
 // v1.3.1 2nd correction pass: replaces facultyRoutesHtml_/fmRouteLineHtml_.
 // Displays the full ordered pipeline result: MTD, FM1/FM2/FM3, Raw FMp
@@ -3131,6 +3204,7 @@ function marksIntelligenceCardHtml_(mi) {
     (mi.riskAnalysis ? reasonsListHtml_(mi.riskAnalysis.reasons) : '') +
     a2InferencePanelHtml_(mi.inferredA2) +
     publishedFinalInputHtml_(mi) +
+    publishedFinalAfterInputHtml_(mi) +
     (expanded ? (assessmentStatusTableHtml_(mi) + pipelineHtml_(mi, mi, mi.mtd) + a3RecoveryCalculatorHtml_(mi) + whatIfSimulatorHtml_(mi)) :
       '<div style="font-size:11.5px;color:#B24B2E;font-weight:700;margin-top:8px;cursor:pointer;" class="ep-clickable" onclick="' + h_('toggleMarksIntelligenceExpanded_', [mi.code]) + '">Show assessment status, calculation pipeline, A3 Recovery Calculator &amp; What-If Simulator ▾</div>') +
     '</div>';
@@ -3572,8 +3646,10 @@ function closeStudySessionForm_() {
   render();
 }
 function setStudySessionField_(field, value) {
+  // no render(): a full render() on every keystroke rebuilds the whole
+  // page's innerHTML, which destroys and recreates this input and drops
+  // focus after one character. Matches setInboxField_/setMarkField_.
   state.studySessionForm = Object.assign({}, state.studySessionForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function toggleStudySessionSync_() {
   var f = state.studySessionForm;
@@ -3583,8 +3659,8 @@ function toggleStudySessionSync_() {
 function saveStudySession_() {
   var f = state.studySessionForm;
   if (f.saving) return;
-  if (!f.module) { setStudySessionField_('error', 'Choose a module.'); return; }
-  if (!f.date) { setStudySessionField_('error', 'Choose a date.'); return; }
+  if (!f.module) { setStudySessionField_('error', 'Choose a module.'); render(); return; }
+  if (!f.date) { setStudySessionField_('error', 'Choose a date.'); render(); return; }
   state.studySessionForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   var editingId = state.studySessionEditingId;
@@ -3619,15 +3695,15 @@ function closeIndependentStudyForm_() {
   render();
 }
 function setIndependentField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.independentStudyForm = Object.assign({}, state.independentStudyForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function saveIndependentStudy_() {
   var f = state.independentStudyForm;
   if (f.saving) return;
-  if (!f.module) { setIndependentField_('error', 'Choose a module.'); return; }
-  if (!(f.topic || '').trim()) { setIndependentField_('error', 'Give this a topic.'); return; }
-  if (!f.duration) { setIndependentField_('error', 'Enter how many minutes.'); return; }
+  if (!f.module) { setIndependentField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.topic || '').trim()) { setIndependentField_('error', 'Give this a topic.'); render(); return; }
+  if (!f.duration) { setIndependentField_('error', 'Enter how many minutes.'); render(); return; }
   state.independentStudyForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   runScript_('api_logIndependentStudy', [f]).then(function (res) {
@@ -3644,9 +3720,21 @@ function saveIndependentStudy_() {
 }
 
 // ---- Study Planner: weekly suggestions preview/accept ----
+function setSuggestionsWeekOffset_(value) {
+  state.suggestionsWeekOffset = parseInt(value, 10) || 0;
+  render();
+}
 function doGenerateSuggestions_() {
   state.suggestionsLoading = true; render();
-  runScript_('api_generateStudySuggestions', [null]).then(function (res) {
+  // api_generateStudySuggestions already accepts a week-anchor date and
+  // resolves it to that week's Monday server-side -- any date inside the
+  // target week works, so "today + N*7 days" is enough for the "up to 3
+  // weeks ahead" selector above.
+  var offsetDays = (state.suggestionsWeekOffset || 0) * 7;
+  var anchor = new Date();
+  anchor.setDate(anchor.getDate() + offsetDays);
+  var anchorIso = anchor.getFullYear() + '-' + String(anchor.getMonth() + 1).padStart(2, '0') + '-' + String(anchor.getDate()).padStart(2, '0');
+  runScript_('api_generateStudySuggestions', [anchorIso]).then(function (res) {
     state.suggestionsLoading = false;
     if (!res.ok) { showToast_('error', 'Could not generate suggestions: ' + res.error); render(); return; }
     state.suggestionsPreview = res.data;
@@ -3655,10 +3743,10 @@ function doGenerateSuggestions_() {
 }
 function closeSuggestions_() { state.suggestionsPreview = null; render(); }
 function setSuggestionField_(i, field, value) {
+  // no render(): free typing (topic), matches setStudySessionField_.
   var p = state.suggestionsPreview;
   if (!p) return;
   p.suggestions[i] = Object.assign({}, p.suggestions[i], (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function rejectOneSuggestion_(i) {
   var p = state.suggestionsPreview;
@@ -3692,8 +3780,8 @@ function toggleCompleteSessionUi_(sessionId) {
   render();
 }
 function setCompleteField_(field, value) {
+  // no render(): free typing (actual minutes / confidence % / note), matches setStudySessionField_.
   state.completeSessionForm = Object.assign({}, state.completeSessionForm, (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function closeCompleteSession_() { state.completingSessionId = null; state.completeSessionForm = null; render(); }
 function saveCompleteSession_(sessionId) {
@@ -3742,15 +3830,15 @@ function openRevisionAddForm_() {
 }
 function closeRevisionAddForm_() { state.revisionFormOpen = false; state.revisionForm = null; render(); }
 function setRevisionAddField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.revisionForm = Object.assign({}, state.revisionForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function saveRevisionTopic_() {
   var f = state.revisionForm;
-  if (!f.module) { setRevisionAddField_('error', 'Choose a module.'); return; }
-  if (!(f.topic || '').trim()) { setRevisionAddField_('error', 'Give this a topic name.'); return; }
+  if (!f.module) { setRevisionAddField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.topic || '').trim()) { setRevisionAddField_('error', 'Give this a topic name.'); render(); return; }
   runScript_('api_addRevisionTopic', [f]).then(function (res) {
-    if (!res.ok) { setRevisionAddField_('error', res.error); return; }
+    if (!res.ok) { setRevisionAddField_('error', res.error); render(); return; }
     showToast_('success', 'Revision topic added.');
     closeRevisionAddForm_();
     loadPlannerData();
@@ -3769,8 +3857,8 @@ function toggleRevisionEditUi_(key) {
 }
 function closeRevisionEditUi_() { state.revisionEditKey = null; state.revisionEditForm = null; render(); }
 function setRevisionEditField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.revisionEditForm = Object.assign({}, state.revisionEditForm, (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function toggleRevisionWeakUi_() {
   var f = state.revisionEditForm;
@@ -3804,10 +3892,10 @@ function toggleModuleConfigUi_(code) {
 }
 function closeModuleConfigUi_(code) { state.moduleConfigFormOpenByCode[code] = false; render(); }
 function setModuleConfigField_(code, field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   var f = state.moduleConfigForms[code] || {};
   var o = {}; o[field] = value;
   state.moduleConfigForms[code] = Object.assign({}, f, o);
-  render();
 }
 function toggleModuleConfigBool_(code, field) {
   var f = state.moduleConfigForms[code] || {};
@@ -3845,14 +3933,14 @@ function openResourceForm_(resourceId) {
 }
 function closeResourceForm_() { state.resourceFormOpen = false; state.resourceForm = null; state.resourceEditingId = null; render(); }
 function setResourceField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.resourceForm = Object.assign({}, state.resourceForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function saveResource_() {
   var f = state.resourceForm;
   if (f.saving) return;
-  if (!f.module) { setResourceField_('error', 'Choose a module.'); return; }
-  if (!(f.title || '').trim()) { setResourceField_('error', 'Give this resource a name.'); return; }
+  if (!f.module) { setResourceField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.title || '').trim()) { setResourceField_('error', 'Give this resource a name.'); render(); return; }
   state.resourceForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   var editingId = state.resourceEditingId;
@@ -4022,8 +4110,7 @@ function toggleMarksIntelligenceExpanded_(code) {
   render();
 }
 function setA3CustomTargetInput_(code, value) {
-  state.a3CustomTargetInput[code] = value;
-  render();
+  state.a3CustomTargetInput[code] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function computeCustomA3Recovery_(moduleName, code) {
   var raw = state.a3CustomTargetInput[code];
@@ -4055,8 +4142,34 @@ function computeCustomA3Recovery_(moduleName, code) {
 // existing custom-target A3 Recovery lookup.
 // ------------------------------------------------------------------
 function setPublishedFinalInput_(code, value) {
-  state.publishedFinalInput[code] = value;
+  state.publishedFinalInput[code] = value; // no render(): free typing (input keeps its own DOM value; state is only read on Save)
+}
+// v1.4.0 -- mirror of setPublishedFinalInput_/savePublishedFinal_ for the
+// after-A3 field.
+function setPublishedFinalAfterInput_(code, value) {
+  state.publishedFinalAfterInput[code] = value; // no render(): free typing
+}
+function savePublishedFinalAfter_(moduleName, code, clear) {
+  var value;
+  if (clear) {
+    value = '';
+  } else {
+    var raw = state.publishedFinalAfterInput[code];
+    if (raw === undefined) { return; } // nothing typed -- Save is a no-op until the field is touched
+    var n = parseFloat(raw);
+    if (raw === '') { value = ''; }
+    else if (isNaN(n) || n < 0 || n > 100) { showToast_('error', 'Enter a Published Final between 0 and 100, or leave it blank to clear.'); return; }
+    else { value = n; }
+  }
+  state.publishedFinalAfterSaving[code] = true;
   render();
+  runScript_('api_setPublishedFinalAfterA3', [moduleName, value]).then(function (res) {
+    state.publishedFinalAfterSaving[code] = false;
+    if (!res.ok) { showToast_('error', 'Could not save Published Final: ' + res.error); render(); return; }
+    delete state.publishedFinalAfterInput[code];
+    showToast_('success', clear ? 'Published Final (After A3) cleared for ' + moduleName + '.' : 'Published Final (After A3) saved for ' + moduleName + '.');
+    loadPlannerData();
+  });
 }
 function savePublishedFinal_(moduleName, code, clear) {
   var value;
@@ -4111,8 +4224,7 @@ function saveAssessmentStatus_(moduleName, code, key) {
 }
 
 function setDcaMarkInput_(code, value) {
-  state.dcaMarkInput[code] = value;
-  render();
+  state.dcaMarkInput[code] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function saveDcaMark_(moduleName, code, clear) {
   var value;
@@ -4143,8 +4255,7 @@ function toggleWhatIfOpen_(code) {
 }
 function setWhatIfInput_(code, key, value) {
   state.whatIfInput[code] = state.whatIfInput[code] || {};
-  state.whatIfInput[code][key] = value;
-  render();
+  state.whatIfInput[code][key] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function runWhatIfSimulation_(moduleName, code) {
   var typed = state.whatIfInput[code] || {};
@@ -4546,7 +4657,7 @@ function loadSemesterDashboard_() {
     render();
   });
 }
-function setSemReflectionField_(key, value) { state.semReflection[key] = value; render(); }
+function setSemReflectionField_(key, value) { state.semReflection[key] = value; } // no render(): free typing
 
 // ---- Report (spec §2/§3) ----
 function runSemGenerateReport_() {
