@@ -180,6 +180,8 @@ var TASK_TYPES_LIST = ['Watch lecture', 'Review notes', 'Learn concept', 'Comple
 var SESSION_STATUSES_LIST = ['Planned', 'Completed', 'Partly completed', 'Skipped', 'Rescheduled'];
 var SESSION_STATUS_COLORS = { Planned: ['#FBEFD9', '#B58821'], Completed: ['#E4F0E9', '#3F7A5C'], 'Partly completed': ['#F3E3D2', '#8F3B23'], Skipped: ['#F7E2D8', '#8F3B23'], Rescheduled: ['#E4EEF7', '#2E6F9E'] };
 var RESOURCE_TYPES_LIST = ['Lecture', 'Lecture video', 'Tutorial', 'Past paper', 'Formula bible', 'Textbook chapter', 'Practice set', 'Flashcards', 'Summary notes', 'Mistake review', 'Other'];
+// v1.4.0 -- mirrors VALID_DRIVE_CATEGORIES in Drive_Resources_v1.4.0.js.
+var VALID_DRIVE_CATEGORIES_LIST = ['Completed tutorial tests', 'Assessment or exam', 'Questions for professors'];
 var RESOURCE_STATUSES_LIST = ['Not started', 'In progress', 'Completed', 'Reviewed', 'Needs redo'];
 var RESOURCE_STATUS_COLORS = { 'Not started': ['#F3E3D2', '#8A7A68'], 'In progress': ['#FBEFD9', '#B58821'], Completed: ['#E4F0E9', '#3F7A5C'], Reviewed: ['#E4F0E9', '#3F7A5C'], 'Needs redo': ['#F7E2D8', '#8F3B23'] };
 // Each resource type maps to four short progress-flag labels (Flag A-D) --
@@ -345,6 +347,15 @@ var state = {
   resourceFormOpen: false,
   resourceForm: null,
   resourceEditingId: null,
+  // v1.4.0 -- Drive upload form (separate from resourceForm above, which
+  // stays the existing text-reference-only flow). fileChosenName is purely
+  // a label for what's currently selected -- the actual File object lives
+  // in the DOM file input itself (see saveDriveUpload_), never in state,
+  // since a File object can't be kept across a render() rebuild anyway.
+  driveUploadFormOpen: false,
+  driveUploadForm: null,
+  driveUploadSaving: false,
+  driveUploadFileChosenName: '',
 
   revisionFormOpen: false,
   revisionForm: null,
@@ -1372,6 +1383,7 @@ function emptyViewModel_(message) {
     suggestionsPreview: null, suggestionsLoading: false, suggestionsWeekOffset: 0,
     externalCalendarEvents: null, externalCalendarLoading: false, externalCalendarReason: null,
     resourceFormOpen: false, resourceForm: null, resourceEditingId: null,
+    driveUploadFormOpen: false, driveUploadForm: null, driveUploadSaving: false, driveUploadFileChosenName: '',
     revisionFormOpen: false, revisionForm: null, revisionEditForm: null,
     moduleConfigFormOpenByCode: {}, moduleConfigForms: {},
     // v1.3.0 -- defaults so a pre-boot/error render never throws reading these.
@@ -1894,6 +1906,8 @@ function computeViewModel() {
     suggestionsPreview: state.suggestionsPreview, suggestionsLoading: state.suggestionsLoading,
     suggestionsWeekOffset: state.suggestionsWeekOffset,
     resourceFormOpen: state.resourceFormOpen, resourceForm: state.resourceForm, resourceEditingId: state.resourceEditingId,
+    driveUploadFormOpen: state.driveUploadFormOpen, driveUploadForm: state.driveUploadForm, driveUploadSaving: state.driveUploadSaving,
+    driveUploadFileChosenName: state.driveUploadFileChosenName,
     revisionFormOpen: state.revisionFormOpen, revisionForm: state.revisionForm, revisionEditForm: state.revisionEditForm,
     moduleConfigFormOpenByCode: state.moduleConfigFormOpenByCode, moduleConfigForms: state.moduleConfigForms,
     todayLabelFull: DAY_NAMES[now.getDay()].toUpperCase() + ' · ' + now.getDate() + ' ' + MONTH_NAMES[now.getMonth()].toUpperCase() + ' ' + now.getFullYear(),
@@ -3484,11 +3498,50 @@ function resourceRowHtml_(vm, r) {
     '</div></div>';
 }
 
+// v1.4.0 -- uploads a real file to Google Drive (Semester name from
+// Settings > Module > category), then writes a normal Resources row
+// pointing at it. Kept entirely separate from resourceFormHtml_ above,
+// which stays the existing text-reference-only flow untouched. The file
+// input has no value binding (native, browser-managed) and no onchange
+// handler that would trigger render() -- see saveDriveUpload_ for why:
+// this app's render() rebuilds the whole page's innerHTML, which would
+// destroy the input and lose the chosen file before Save is even clicked.
+function driveUploadFormHtml_(vm) {
+  var f = vm.driveUploadForm || {};
+  var moduleOptions = '<option value="">Module…</option>' + vm.modules.map(function (m) {
+    return '<option value="' + escAttr(m.name) + '"' + (f.module === m.name ? ' selected' : '') + '>' + esc(m.name) + '</option>';
+  }).join('');
+  var categoryOptions = VALID_DRIVE_CATEGORIES_LIST.map(function (c) {
+    return '<option value="' + c + '"' + (f.category === c ? ' selected' : '') + '>' + c + '</option>';
+  }).join('');
+  var prioOptions = ['Low', 'Medium', 'High'].map(function (p) { return '<option value="' + p + '"' + (f.priority === p ? ' selected' : '') + '>' + p + ' priority</option>'; }).join('');
+  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:16px;padding:20px;margin-bottom:20px;max-width:480px;">' +
+    '<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#B24B2E;margin-bottom:12px;">UPLOAD FILE TO DRIVE</div>' +
+    '<div style="font-size:11.5px;color:#8A7A68;margin-bottom:10px;">Goes into "&lt;Semester name&gt;/&lt;Module&gt;/&lt;category&gt;" in your Google Drive (created automatically), and shows up below like any other resource.</div>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;">' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['module']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + moduleOptions + '</select>' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['category']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + categoryOptions + '</select>' +
+    '<input value="' + escAttr(f.title) + '" oninput="' + hv_('setDriveUploadField_', ['title']) + '" placeholder="Resource name (e.g. Tutorial 4)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;">' +
+    '<input value="' + escAttr(f.topic) + '" oninput="' + hv_('setDriveUploadField_', ['topic']) + '" placeholder="Topic or chapter (optional)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;">' +
+    '<input id="drive-upload-file-input" type="file" style="font-size:13px;">' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['priority']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + prioOptions + '</select>' +
+    '<textarea oninput="' + hv_('setDriveUploadField_', ['notes']) + '" placeholder="Notes (optional)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;min-height:56px;resize:vertical;">' + esc(f.notes) + '</textarea>' +
+    (f.error ? '<div style="font-size:12px;color:#8F3B23;background:#F7E2D8;border-radius:8px;padding:8px 10px;">' + esc(f.error) + '</div>' : '') +
+    '<div style="display:flex;gap:8px;">' +
+    '<div class="ep-clickable" onclick="' + h_('saveDriveUpload_', []) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:14px;padding:11px;border-radius:10px;cursor:pointer;">' + (vm.driveUploadSaving ? 'Uploading…' : 'Upload') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('closeDriveUploadForm_', []) + '" style="flex:1;text-align:center;background:#F3E3D2;color:#3B332B;font-weight:600;font-size:14px;padding:11px;border-radius:10px;cursor:pointer;">Cancel</div>' +
+    '</div></div></div>';
+}
+
 function screenResources_(vm) {
   var rows = vm.resources.length ? vm.resources.map(function (r) { return resourceRowHtml_(vm, r); }).join('') : '<div style="font-size:13px;color:#8A7A68;">No resources logged yet. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('openResourceForm_', [null]) + '">Add one.</span></div>';
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Resources</div>' +
-    '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Named study materials only — lectures, tutorials, past papers, formula bible chapters. No files are stored here.</div>' +
-    '<div class="ep-clickable" onclick="' + h_('openResourceForm_', [null]) + '" style="display:inline-block;background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;margin-bottom:20px;">+ Add resource</div>' +
+    '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Named study materials — lectures, tutorials, past papers, formula bible chapters — as a text reference, or upload an actual file to Google Drive below.</div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">' +
+    '<div class="ep-clickable" onclick="' + h_('openResourceForm_', [null]) + '" style="display:inline-block;background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Add resource</div>' +
+    '<div class="ep-clickable" onclick="' + h_('openDriveUploadForm_', []) + '" style="display:inline-block;background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Upload file to Drive</div>' +
+    '</div>' +
+    (vm.driveUploadFormOpen ? driveUploadFormHtml_(vm) : '') +
     (vm.resourceFormOpen ? resourceFormHtml_(vm) : '') +
     '<div style="display:flex;flex-direction:column;gap:10px;">' + rows + '</div></div>';
 }
@@ -4001,6 +4054,7 @@ function saveModuleConfigUi_(code) {
 
 // ---- Resources: add/edit/delete + type-specific progress ----
 function openResourceForm_(resourceId) {
+  state.driveUploadFormOpen = false;
   if (resourceId) {
     var r = findRaw_('resources', 'resourceId', resourceId);
     if (!r) { showToast_('error', 'Could not find that resource.'); return; }
@@ -4017,6 +4071,63 @@ function openResourceForm_(resourceId) {
   render();
 }
 function closeResourceForm_() { state.resourceFormOpen = false; state.resourceForm = null; state.resourceEditingId = null; render(); }
+
+// v1.4.0 -- Drive upload form. See driveUploadFormHtml_ for why the file
+// input itself has no state/onchange wiring.
+var MAX_DRIVE_UPLOAD_BYTES_CLIENT_ = 20 * 1024 * 1024; // matches MAX_UPLOAD_BYTES in Drive_Resources_v1.4.0.js
+function openDriveUploadForm_() {
+  state.resourceFormOpen = false;
+  state.driveUploadForm = { module: '', category: VALID_DRIVE_CATEGORIES_LIST[0], title: '', topic: '', priority: 'Medium', notes: '', error: '', saving: false };
+  state.driveUploadFormOpen = true;
+  render();
+}
+function closeDriveUploadForm_() { state.driveUploadFormOpen = false; state.driveUploadForm = null; render(); }
+function setDriveUploadField_(field, value) {
+  // no render(): free typing, matches setResourceField_. Also intentionally
+  // never touched by the file input itself (no onchange here) -- a render()
+  // between choosing a file and clicking Upload would rebuild the <input>
+  // and lose the selection, since a browser file input's chosen file can't
+  // be restored programmatically after its DOM node is replaced.
+  state.driveUploadForm = Object.assign({}, state.driveUploadForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
+}
+function saveDriveUpload_() {
+  var f = state.driveUploadForm;
+  if (!f || state.driveUploadSaving) return;
+  if (!f.module) { setDriveUploadField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.title || '').trim()) { setDriveUploadField_('error', 'Give this resource a name.'); render(); return; }
+  var fileInput = document.getElementById('drive-upload-file-input');
+  var file = fileInput && fileInput.files && fileInput.files[0];
+  if (!file) { setDriveUploadField_('error', 'Choose a file to upload.'); render(); return; }
+  if (file.size > MAX_DRIVE_UPLOAD_BYTES_CLIENT_) {
+    setDriveUploadField_('error', 'File is too large (' + Math.round(file.size / 1024 / 1024) + 'MB). Keep uploads under ' + Math.round(MAX_DRIVE_UPLOAD_BYTES_CLIENT_ / 1024 / 1024) + 'MB.');
+    render();
+    return;
+  }
+  state.driveUploadSaving = true; render();
+  var reader = new FileReader();
+  reader.onerror = function () {
+    state.driveUploadSaving = false;
+    showToast_('error', 'Could not read the file — try choosing it again.');
+    render();
+  };
+  reader.onload = function () {
+    // reader.result is "data:<mime>;base64,<data>" -- strip the prefix, the
+    // backend only wants the base64 payload itself.
+    var base64 = String(reader.result).split(',')[1] || '';
+    runScript_('api_uploadResourceFile', [{
+      module: f.module, category: f.category, title: f.title, topic: f.topic, priority: f.priority, notes: f.notes,
+      fileName: file.name, mimeType: file.type, base64Data: base64
+    }]).then(function (res) {
+      state.driveUploadSaving = false;
+      if (!res.ok) { setDriveUploadField_('error', res.error); render(); return; }
+      showToast_('success', 'Uploaded to Drive and added to Resources.');
+      closeDriveUploadForm_();
+      loadPlannerData();
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
 function setResourceField_(field, value) {
   // no render(): free typing, matches setStudySessionField_.
   state.resourceForm = Object.assign({}, state.resourceForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());

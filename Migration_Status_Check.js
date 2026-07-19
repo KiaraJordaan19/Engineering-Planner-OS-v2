@@ -42,6 +42,8 @@ function runMigrationStatusCheck() {
   checkColumn("Marks Intelligence v1.3.1", MARKS_TRACKER_SHEET, MARKS_TRACKER_HEADER_ROW, "Published Final (Before A3)", "runMarksIntelligenceV131Migration");
   checkColumn("Marks Intelligence v1.4.0 (AF engine + Published Final After A3)", MARKS_TRACKER_SHEET, MARKS_TRACKER_HEADER_ROW, "Published Final (After A3)", "runMarksIntelligenceV140Migration");
   checkSheet("Semester Lifecycle v1.4.0", "23 Semester Archive", "runSemesterLifecycleV140Migration");
+  checkColumn("Drive Resources v1.4.0", RESOURCES_SHEET, HEADER_ROW, "Drive category", "runDriveResourcesV140Migration");
+  checkColumn("Reminders Feed v1.4.0", ASSIGNMENTS_SHEET, HEADER_ROW, "Synced to Reminders", "runRemindersFeedV140Migration");
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");

@@ -63,6 +63,7 @@ function onOpen() {
     .addSeparator()
     .addItem("Validate Workbook", "validateWorkbook")
     .addItem("Check Migration Status", "runMigrationStatusCheck")
+    .addItem("Show Reminders Feed Info", "showRemindersFeedInfo")
     .addItem("Delete Calendar Event for Selected Row", "deleteCalendarEventForSelectedRow")
     .addItem("Open Setup Guide", "openSetupGuide")
     .addToUi();

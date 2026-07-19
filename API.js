@@ -157,6 +157,14 @@ function runRecoveryDiagnostics_() {
 // master introduced the bridge. doPost has been removed outright: it had no
 // other production purpose.
 function doGet(e) {
+  // v1.4.0 -- Reminders feed (see Reminders_Feed_v1.4.0.js): a request
+  // carrying feed/markSynced query params is a Shortcut/automation call,
+  // never a browser loading the app -- handled entirely separately, always
+  // returns JSON, and never falls through to serving the app page below.
+  var params = (e && e.parameter) || {};
+  if (params.feed === "assignments" || params.markSynced) {
+    return remindersFeedRequest_(params);
+  }
   return HtmlService.createHtmlOutputFromFile("Index")
     .setTitle("Engineering Planner OS")
     .addMetaTag("viewport", "width=device-width, initial-scale=1")
