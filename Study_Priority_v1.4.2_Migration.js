@@ -24,16 +24,16 @@
  *     treated as TRUE by the code that reads it — see api_getPlannerData —
  *     so this is safe even before you've explicitly set it either way.
  *
- *  2. "Manual priority override" — one of Critical / Very High / High /
- *     Maintain / Low, left BLANK by default (never invented). When set,
- *     it wins outright over whatever ai_computePriority_ would otherwise
- *     compute, for ANY module — including one with a fully Verified
- *     framework, if you disagree with the computed number. This is the
- *     ONLY way a module without a framework (Rule status never
- *     "Verified") can appear in the Marks Priority Engine, the weekly
- *     study allocation, or "Generate study plan" at all — set it once for
- *     Industrial Engineering (e.g. "Maintain") and it's included from
- *     then on.
+ *  2. "Manual priority override" — SUPERSEDED as of v1.4.3, see
+ *     ai_computePriority_ and api_generateStudySuggestions in API.js. This
+ *     migration still adds the column (harmless, unused) for anyone who ran
+ *     it before the change, but nothing reads it anymore: it silently kept
+ *     overriding the computed category indefinitely once set, with no
+ *     visible reminder, which produced confusing "why is this module's
+ *     priority stuck?" results as a course progressed. Priority for a
+ *     module with no verified framework (like Industrial Engineering) is
+ *     now entered fresh, per generation, in the Study Planner's "Which
+ *     modules?" checklist — never saved, never goes stale.
  *
  * Also, as of this release, the priority engine factors in the next
  * scheduled Tutorial session for a module (from "05 Timetable Import"),

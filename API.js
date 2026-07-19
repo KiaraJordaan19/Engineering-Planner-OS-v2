@@ -423,12 +423,11 @@ function api_getPlannerData() {
         // treated as TRUE, never silently excluded -- only an explicit
         // FALSE excludes.
         includeInStudyPlan: m["Include in study plan (TRUE/FALSE)"] !== false,
-        // v1.4.2 -- when set, always wins over ai_computePriority_'s
-        // computed category -- the only way a module with no verified
-        // AF/A1/A2/A3 framework (e.g. Industrial Engineering) can appear
-        // in the Marks Priority Engine / weekly allocation / study plan
-        // suggestions at all.
-        manualPriorityOverride: (VALID_PRIORITY_OVERRIDES.indexOf(m["Manual priority override"]) !== -1) ? m["Manual priority override"] : null,
+        // v1.4.2's persistent "Manual priority override" read is retired as
+        // of v1.4.3 (see ai_computePriority_) -- the column may still exist
+        // on a workbook that ran that migration, but nothing reads it
+        // anymore; priority for a module with no verified framework is now
+        // entered fresh per generation instead (api_generateStudySuggestions).
         contactNotes: m["Contact notes"] || ""
       };
     });
@@ -2180,7 +2179,19 @@ function api_deleteStudyTask(taskId) {
 // was accepted" half of the flow -- api_acceptStudySuggestions below is
 // completely unmodified from v1.2.0/RC2 and never runs automatically.
 // ------------------------------------------------------------------
-function api_generateStudySuggestions(weekAnchorIso) {
+/**
+ * `manualPriorities` (v1.4.3) is an OPTIONAL {moduleCode: category} map --
+ * category one of VALID_PRIORITY_OVERRIDES -- entered fresh in the Study
+ * Planner's "Which modules?" checklist immediately before this call and
+ * NEVER saved anywhere (replaces v1.4.2's persistent "Manual priority
+ * override" column, which kept silently overriding the computed category
+ * indefinitely once set -- see ai_computePriority_). Applies ONLY to this
+ * one generation: a module with no computed priority (e.g. Industrial
+ * Engineering, "Rules Incomplete") needs an entry here to be eligible at
+ * all; a module WITH a computed priority can still have its category
+ * overridden for just this call if you disagree with it on the day.
+ */
+function api_generateStudySuggestions(weekAnchorIso, manualPriorities) {
   try {
     var anchor = new Date();
     if (weekAnchorIso && /^\d{4}-\d{2}-\d{2}$/.test(weekAnchorIso)) {
@@ -2192,7 +2203,18 @@ function api_generateStudySuggestions(weekAnchorIso) {
     // re-implementing "what is each module's priority" a second time here.
     var plannerData = api_getPlannerData();
     if (!plannerData.ok) return plannerData;
-    var built = buildPrioritizedStudySuggestions_(anchor, plannerData.data.priorities, plannerData.data.revisionTracker, plannerData.data.resources, plannerData.data.studyTasks);
+    // v1.4.3 -- apply the ephemeral overrides to a COPY of the computed
+    // priorities, never to plannerData.data.priorities itself -- nothing
+    // here is written back to any sheet.
+    var priorities = plannerData.data.priorities.map(function (p) {
+      var override = manualPriorities && manualPriorities[p.code];
+      if (!override || VALID_PRIORITY_OVERRIDES.indexOf(override) === -1) return p;
+      return Object.assign({}, p, {
+        category: override, score: null,
+        reasons: ["Priority entered for this generation only: \"" + override + "\" -- not saved."]
+      });
+    });
+    var built = buildPrioritizedStudySuggestions_(anchor, priorities, plannerData.data.revisionTracker, plannerData.data.resources, plannerData.data.studyTasks);
     return ok_(built);
   } catch (e) { return fail_(e); }
 }
@@ -2915,13 +2937,11 @@ function api_saveModuleAcademicConfig(moduleCode, form) {
     if (typeof form.compulsoryPractical === "boolean" && map['Compulsory practical/lab (TRUE/FALSE)']) {
       sheet.getRange(targetRow, col_(map, 'Compulsory practical/lab (TRUE/FALSE)')).setValue(form.compulsoryPractical);
     }
-    // v1.4.2 -- Study Planner-specific include switch + manual priority override.
+    // v1.4.2 -- Study Planner-specific include switch. (Manual priority
+    // override used to be settable here too -- retired in v1.4.3, see
+    // ai_computePriority_; priority is now entered fresh per generation.)
     if (typeof form.includeInStudyPlan === "boolean" && map['Include in study plan (TRUE/FALSE)']) {
       sheet.getRange(targetRow, col_(map, 'Include in study plan (TRUE/FALSE)')).setValue(form.includeInStudyPlan);
-    }
-    if (form.manualPriorityOverride !== undefined && map['Manual priority override']) {
-      var overrideVal = (VALID_PRIORITY_OVERRIDES.indexOf(form.manualPriorityOverride) !== -1) ? form.manualPriorityOverride : "";
-      sheet.getRange(targetRow, col_(map, 'Manual priority override')).setValue(overrideVal);
     }
 
     logAutomation_("Module configuration saved", moduleCode, "Updated", "");
@@ -3018,18 +3038,18 @@ function isoWeekKey_(dateIso) {
  * which, purely so the reason string below can disclose it honestly.
  */
 function ai_computePriority_(m) {
-  // v1.4.2 -- a manual override (03 Modules: "Manual priority override")
-  // always wins outright, for any module, checked BEFORE the Rule-status
-  // gate below -- this is the only path that can give a module with no
-  // verified framework (e.g. Industrial Engineering) a real category, so
-  // it stops being permanently invisible to the study plan.
-  if (m.manualPriorityOverride) {
-    return { code: m.code, name: m.name, category: m.manualPriorityOverride, score: null,
-      reasons: ["Manually set to \"" + m.manualPriorityOverride + "\" in 03 Modules (\"Manual priority override\") -- overrides whatever would otherwise be computed."] };
-  }
+  // v1.4.3 -- the v1.4.2 persistent "Manual priority override" (03 Modules)
+  // was retired here: it silently kept overriding the computed category
+  // indefinitely once set, with no visible reminder, which produced
+  // confusing "why is this module's priority stuck?" results as a course
+  // progressed. The Marks Priority Engine goes back to reporting "Rules
+  // Incomplete" honestly for a module with no verified framework -- see
+  // api_generateStudySuggestions/buildPrioritizedStudySuggestions_ for
+  // where a module like that can still get study suggestions: a priority
+  // entered fresh each time you generate a plan, never saved.
   if (m.ruleStatus !== "Verified") {
     return { code: m.code, name: m.name, category: "Rules Incomplete", score: null,
-      reasons: ["Module Rules for " + m.name + " are not marked \"Verified\" in 04 Module Rules -- no priority is computed until rules are verified. Set \"Manual priority override\" in 03 Modules to include this module anyway."] };
+      reasons: ["Module Rules for " + m.name + " are not marked \"Verified\" in 04 Module Rules -- no priority is computed until rules are verified."] };
   }
   var current = pctToNumber_(m.finalOrProvisional);
   if (current === null) {
@@ -3860,7 +3880,6 @@ function computeAcademicIntelligence_(bundle) {
       targetMarkOverride: m.targetMark, settingsTargetMark: bundle.settings.targetMark,
       daysToNextAssessment: nextA ? nextA.days : null, nextAssessmentLabel: nextA ? nextA.label : null,
       daysToNextTutorial: nextT ? nextT.days : null, nextTutorialLabel: nextT ? nextT.label : null,
-      manualPriorityOverride: m.manualPriorityOverride,
       repeated: m.repeated, difficulty: m.difficulty, workload: m.workload,
       incompleteTaskCount: incompleteTasksByModule[m.name] || 0, weakTopicCount: weakTopicsByModule[m.name] || 0,
       recentPracticeScores: scores, requiredFutureMark: requiredA3ByTarget(m, marksRow, (typeof m.targetMark === "number") ? m.targetMark : bundle.settings.targetMark)

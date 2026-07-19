@@ -336,6 +336,7 @@ var state = {
   studySessionForm: null,       // populated by openStudySessionForm_()
   studySessionEditingId: null,  // null = adding new, else the Study Session ID being edited
   studyIncludeChecklistOpen: false, // v1.4.2 -- "Which modules?" panel on Study Planner, collapsed by default
+  studyGenPriorityOverrides: {}, // v1.4.3 -- {moduleCode: category}, session-only, sent only to the next Generate call, never saved
   independentStudyFormOpen: false,
   independentStudyForm: null,
   completingSessionId: null,    // Study Session ID currently showing its inline completion form, or null
@@ -2773,29 +2774,32 @@ function studySessionCardHtml_(s) {
 }
 
 // v1.4.2 -- quick "which modules?" checklist, shown collapsed by default
-// above the Generate controls. Each row writes straight through
-// api_saveModuleAcademicConfig (same single-field partial-form pattern
-// toggleResourceStatusUi_ etc. already use elsewhere) -- no separate
-// open/close form needed, matches "glance at / adjust before generating."
+// above the Generate controls. Include is still a saved setting
+// (quickToggleStudyInclude_, unchanged). Priority (v1.4.3) is NOT saved --
+// state.studyGenPriorityOverrides is plain session state, sent alongside
+// the week offset only when you click Generate (see doGenerateSuggestions_
+// / api_generateStudySuggestions), never written to any sheet. This
+// replaces v1.4.2's persistent "Manual priority override" column, which
+// kept silently overriding the computed category indefinitely once set.
 function studyIncludeChecklistHtml_(vm) {
   var priorityByCode = {};
   (vm.priorities || []).forEach(function (p) { priorityByCode[p.code] = p; });
   var rows = vm.modules.filter(function (m) { return m.active; }).map(function (m) {
     var p = priorityByCode[m.code];
-    var noOverride = !m.manualPriorityOverride;
-    var needsOverride = noOverride && p && (p.category === 'Rules Incomplete' || p.category === 'Insufficient data');
-    var colors = p ? (PRIORITY_CATEGORY_COLORS[p.category] || PRIORITY_CATEGORY_COLORS['Low']) : PRIORITY_CATEGORY_COLORS['Low'];
-    var badge = p ? '<span style="font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:' + colors[0] + ';color:' + colors[1] + ';">' + esc(p.category) + '</span>' : '';
-    var overrideOptions = [['', needsOverride ? 'No priority — choose one…' : 'Computed automatically']].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (o) { return [o, o]; }))
-      .map(function (pair) { return '<option value="' + pair[0] + '"' + (m.manualPriorityOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    var hasComputed = p && p.category !== 'Rules Incomplete' && p.category !== 'Insufficient data';
+    var sessionOverride = state.studyGenPriorityOverrides[m.code] || '';
+    var blankLabel = hasComputed ? ('Computed: ' + p.category) : 'No priority yet — choose one…';
+    var priorityOptions = [['', blankLabel]].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (o) { return [o, o]; }))
+      .map(function (pair) { return '<option value="' + pair[0] + '"' + (sessionOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
     return '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
       '<div class="ep-clickable" onclick="' + h_('quickToggleStudyInclude_', [m.code, m.includeInStudyPlan]) + '" style="' + (m.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div>' +
       '<div style="width:9px;height:9px;border-radius:3px;background:' + m.color + ';flex-shrink:0;"></div>' +
       '<div style="flex:1;min-width:120px;font-size:13px;font-weight:600;">' + esc(m.short) + '</div>' +
-      (needsOverride ? '<select onchange="' + hv_('quickSetPriorityOverride_', [m.code]) + '" style="padding:6px 8px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:12px;font-family:\'Inter\',sans-serif;">' + overrideOptions + '</select>' : badge) +
+      '<select onchange="' + hv_('setStudyGenPriorityOverride_', [m.code]) + '" style="padding:6px 8px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:12px;font-family:\'Inter\',sans-serif;">' + priorityOptions + '</select>' +
       '</div>';
   }).join('');
-  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;margin-bottom:16px;">' + rows + '</div>';
+  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;margin-bottom:16px;">' + rows +
+    '<div style="padding:8px 14px;font-size:11px;color:#8A7A68;">Priority chosen here applies only to your next "Generate plan" click — nothing is saved, set it fresh each time.</div></div>';
 }
 function screenStudy_(vm) {
   var cards = vm.studySessions.length ? vm.studySessions.map(studySessionCardHtml_).join('')
@@ -2905,10 +2909,8 @@ function moduleConfigFormHtml_(m) {
     minWeeklyHours: m.minWeeklyHours || '', repeated: m.repeated, attendanceSensitive: m.attendanceSensitive,
     compulsoryPractical: m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
     lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
-    includeInStudyPlan: m.includeInStudyPlan !== false, manualPriorityOverride: m.manualPriorityOverride || ''
+    includeInStudyPlan: m.includeInStudyPlan !== false
   };
-  var overrideOptions = [['', 'Computed automatically (no override)']].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (p) { return [p, p]; }))
-    .map(function (pair) { return '<option value="' + pair[0] + '"' + (f.manualPriorityOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
   return '<div style="background:#F9EFE3;border-radius:12px;padding:14px;margin-top:12px;display:flex;flex-direction:column;gap:8px;">' +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;">MODULE CONFIGURATION</div>' +
     '<div style="display:flex;gap:8px;">' +
@@ -2928,9 +2930,8 @@ function moduleConfigFormHtml_(m) {
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">STUDY PLANNER</div>' +
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
     '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'includeInStudyPlan']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Include in study plan</span></div>' +
-    '<select onchange="' + hv_('setModuleConfigField_', [m.code, 'manualPriorityOverride']) + '" style="flex:1;min-width:180px;padding:9px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;">' + overrideOptions + '</select>' +
     '</div>' +
-    (m.ruleStatus !== 'Verified' && !f.manualPriorityOverride ? '<div style="font-size:11px;color:#8A7A68;">This module has no verified AF/A1/A2/A3 framework, so it won\'t get a priority or study suggestions unless you set an override above.</div>' : '') +
+    (m.ruleStatus !== 'Verified' ? '<div style="font-size:11px;color:#8A7A68;">This module has no verified AF/A1/A2/A3 framework, so it won\'t get a computed priority -- set one on the day, in Study Planner\'s "Which modules?" checklist, before generating.</div>' : '') +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">CONTACTS</div>' +
     '<div style="display:flex;gap:8px;">' +
     '<input value="' + escAttr(f.coordinatorName) + '" oninput="' + hv_('setModuleConfigField_', [m.code, 'coordinatorName']) + '" placeholder="Coordinator name" style="flex:1;padding:9px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
@@ -3953,7 +3954,9 @@ function doGenerateSuggestions_() {
   var anchor = new Date();
   anchor.setDate(anchor.getDate() + offsetDays);
   var anchorIso = anchor.getFullYear() + '-' + String(anchor.getMonth() + 1).padStart(2, '0') + '-' + String(anchor.getDate()).padStart(2, '0');
-  runScript_('api_generateStudySuggestions', [anchorIso]).then(function (res) {
+  // v1.4.3 -- session-only priority picks from the "Which modules?"
+  // checklist, sent for this one call only -- see setStudyGenPriorityOverride_.
+  runScript_('api_generateStudySuggestions', [anchorIso, state.studyGenPriorityOverrides]).then(function (res) {
     state.suggestionsLoading = false;
     if (!res.ok) { showToast_('error', 'Could not generate suggestions: ' + res.error); render(); return; }
     state.suggestionsPreview = res.data;
@@ -4102,12 +4105,12 @@ function quickToggleStudyInclude_(code, currentValue) {
     loadPlannerData();
   });
 }
-function quickSetPriorityOverride_(code, value) {
-  runScript_('api_saveModuleAcademicConfig', [code, { manualPriorityOverride: value }]).then(function (res) {
-    if (!res.ok) { showToast_('error', 'Could not save: ' + res.error); return; }
-    showToast_('success', value ? 'Priority override set.' : 'Priority override cleared.');
-    loadPlannerData();
-  });
+// v1.4.3 -- session-only, never sent to the backend until Generate is
+// clicked (doGenerateSuggestions_) -- see studyIncludeChecklistHtml_.
+function setStudyGenPriorityOverride_(code, value) {
+  if (value) state.studyGenPriorityOverrides[code] = value;
+  else delete state.studyGenPriorityOverrides[code];
+  render();
 }
 
 // ---- Module configuration + contacts ----
@@ -4120,7 +4123,7 @@ function toggleModuleConfigUi_(code) {
       minWeeklyHours: m.minWeeklyHours || '', repeated: !!m.repeated, attendanceSensitive: !!m.attendanceSensitive,
       compulsoryPractical: !!m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
       lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
-      includeInStudyPlan: m.includeInStudyPlan !== false, manualPriorityOverride: m.manualPriorityOverride || ''
+      includeInStudyPlan: m.includeInStudyPlan !== false
     };
   }
   state.moduleConfigFormOpenByCode[code] = nowOpen;
