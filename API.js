@@ -833,11 +833,20 @@ function buildWeekForDate_(anchorDate) {
       if (d < monday || d > friday) return;
       var dayLabel = r[iDay] || labels[(d.getDay() + 6) % 7];
       if (!byDay[dayLabel]) return;
+      var startMin = r[iStart] instanceof Date ? r[iStart].getHours() * 60 + r[iStart].getMinutes() : null;
+      var endMin = r[iEnd] instanceof Date ? r[iEnd].getHours() * 60 + r[iEnd].getMinutes() : null;
       byDay[dayLabel].push({
         module: r[iModule],
         time: (r[iStart] instanceof Date ? Utilities.formatDate(r[iStart], tz, "HH:mm") : "") + "–" + (r[iEnd] instanceof Date ? Utilities.formatDate(r[iEnd], tz, "HH:mm") : ""),
         type: r[iType], venue: iVenue >= 0 ? r[iVenue] : "",
-        color: colorIdx[r[iModule]] || "#8B8B87", _sort: r[iStart] instanceof Date ? r[iStart].getHours() * 60 + r[iStart].getMinutes() : 0,
+        color: colorIdx[r[iModule]] || "#8B8B87",
+        // v1.4.0 -- kept through to the client (previously computed only to
+        // sort here, then deleted) so the Weekly Timetable can position each
+        // class by its real clock time instead of just stacking cards in
+        // order -- a 08:00 class and a 10:00 class on different days used to
+        // render as each column's first card, vertically aligned with each
+        // other despite being 2 hours apart.
+        startMin: startMin, endMin: endMin,
         // v1.2.0 -- carry the exact class date through so the frontend can
         // build a Module|SessionType|DateISO attendance session key without
         // a second lookup (Feature 7).
@@ -846,8 +855,7 @@ function buildWeekForDate_(anchorDate) {
     });
   }
   return labels.map(function (label) {
-    var sessions = byDay[label].sort(function (a, b) { return a._sort - b._sort; });
-    sessions.forEach(function (s) { delete s._sort; });
+    var sessions = byDay[label].sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); });
     return { label: label, sessions: sessions };
   });
 }
