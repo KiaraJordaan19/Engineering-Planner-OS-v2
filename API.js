@@ -2593,6 +2593,40 @@ function api_updateRevisionTopic(module, topic, form) {
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
+/**
+ * v1.4.5 -- "13 Revision Tracker" had no delete path at all, for a topic
+ * added either manually (api_addRevisionTopic) or automatically (a
+ * completed Study Planner session / logged independent study first
+ * creating it). Matches the same (Module, Topic) pair every other Revision
+ * Tracker function already uses to find a row -- there is no stable ID
+ * column on this sheet. If a Study Planner session later completes again
+ * for the same module+topic, it recreates the row fresh (find-or-create,
+ * same as every other completion path) -- deleting here does not delete
+ * the Study Planner session(s) that originally contributed to it.
+ */
+function api_deleteRevisionTopic(module, topic) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var sheet = SpreadsheetApp.getActive().getSheetByName(REVISION_SHEET);
+    if (!sheet) return fail_(new Error("Sheet not found: " + REVISION_SHEET));
+    var map = getColMap_(sheet);
+    var lastRow = sheet.getLastRow();
+    var targetRow = -1;
+    if (lastRow > HEADER_ROW) {
+      var vals = sheet.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, sheet.getLastColumn()).getValues();
+      var moduleCol = col_(map, "Module") - 1, topicCol = col_(map, "Topic") - 1;
+      for (var i = 0; i < vals.length; i++) {
+        if (vals[i][moduleCol] === module && vals[i][topicCol] === topic) { targetRow = HEADER_ROW + 1 + i; break; }
+      }
+    }
+    if (targetRow === -1) return fail_(new Error('No revision topic found for "' + topic + '" in ' + module + ' — it may already have been deleted.'));
+    sheet.deleteRow(targetRow);
+    logAutomation_("Revision topic deleted", module + " — " + topic, "Deleted", "row " + targetRow);
+    return ok_({});
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
 // ------------------------------------------------------------------
 // RESOURCES — lightweight named-materials CRUD + type-specific progress
 // (Feature 6). Never uploads or stores a file -- Link/Notes stay plain text.

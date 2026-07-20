@@ -2877,7 +2877,10 @@ function revisionRowHtml_(r) {
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
     '<div style="display:flex;align-items:center;gap:8px;"><div style="width:10px;height:10px;border-radius:3px;background:' + r.color + ';"></div><div style="font-weight:800;font-size:15px;">' + esc(r.moduleShort) + ' — ' + esc(r.topic) + '</div>' +
     (r.weakTopic ? '<span style="font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:#F7E2D8;color:#8F3B23;">Weak topic</span>' : '') + '</div>' +
+    '<div style="display:flex;gap:12px;align-items:center;flex-shrink:0;">' +
     '<div class="ep-clickable" onclick="' + h_('toggleRevisionEditUi_', [r.key]) + '" style="font-size:11px;font-weight:700;color:#B24B2E;cursor:pointer;">' + (r.isEditing ? 'Close' : 'Edit') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('deleteRevisionTopicUi_', [r.module, r.topic]) + '" style="font-size:11px;font-weight:700;color:#8F3B23;cursor:pointer;">Delete</div>' +
+    '</div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;">' +
     '<div><div style="font-size:10px;color:#8A7A68;font-weight:700;">CONFIDENCE</div><div style="background:#F3E3D2;border-radius:20px;height:7px;overflow:hidden;margin:4px 0;"><div style="background:' + r.color + ';height:7px;width:' + r.confidence + '%;"></div></div><div style="font-size:11px;font-weight:700;">' + r.confidence + '%</div></div>' +
@@ -4099,6 +4102,23 @@ function saveRevisionEdit_(module, topic) {
     if (!res.ok) { showToast_('error', 'Could not save: ' + res.error); return; }
     showToast_('success', 'Revision topic updated.');
     state.revisionEditKey = null; state.revisionEditForm = null;
+    loadPlannerData();
+  });
+}
+
+// v1.4.5 -- Revision Tracker had no delete path at all before this (manual
+// or auto-created topic alike). Uses the existing in-app confirm modal,
+// same stable-ID-free (Module, Topic) matching api_updateRevisionTopic
+// already uses -- this sheet has no ID column.
+function deleteRevisionTopicUi_(module, topic) {
+  openConfirmModal('Delete this revision topic?',
+    'Delete "' + topic + '" (' + module + ') from Revision Tracker? This cannot be undone. It does not delete any Study Planner session that contributed to it.',
+    'doDeleteRevisionTopic_', [module, topic]);
+}
+function doDeleteRevisionTopic_(module, topic) {
+  runScript_('api_deleteRevisionTopic', [module, topic]).then(function (res) {
+    if (!res.ok) { showToast_('error', 'Could not delete: ' + res.error); return; }
+    showToast_('success', 'Revision topic deleted.');
     loadPlannerData();
   });
 }
