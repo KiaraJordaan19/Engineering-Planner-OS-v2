@@ -62,8 +62,18 @@
   .ep-cal-day { border-radius:12px; padding:8px; min-height:96px; min-width:0; }
   .ep-cal-event { font-size:10.5px; font-weight:600; border-radius:6px; padding:3px 6px; margin-bottom:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-  .ep-week-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; }
+  .ep-week-grid { display:grid; grid-template-columns:44px repeat(5,1fr); gap:14px; }
   .ep-week-scroll { overflow-x:visible; }
+  /* v1.4.0 -- shared time-grid for the Weekly Timetable: every day column is
+     the same height (ep-week-track), sessions are positioned absolutely
+     within it by real clock time (inline top/height, computed from
+     startMin/endMin), and the hour ruler (ep-week-hourcol) shares the exact
+     same height/scale so an 08:00 class on one day lines up with an 08:00
+     class on another, instead of each day just stacking cards in order. */
+  .ep-week-track { position:relative; background-image:repeating-linear-gradient(to bottom, #F0DCC8 0, #F0DCC8 1px, transparent 1px, transparent var(--ep-week-hour-px)); background-position:0 0; }
+  .ep-week-hourcol { position:relative; }
+  .ep-week-hourlabel { position:absolute; left:0; right:6px; text-align:right; font-size:10.5px; font-weight:700; color:#8A7A68; transform:translateY(-6px); }
+  .ep-week-session-abs { position:absolute; left:2px; right:2px; border-radius:8px; padding:5px 8px; overflow:hidden; }
 
   .ep-table-scroll { overflow-x:visible; }
 
@@ -158,7 +168,11 @@ var WEEKDAY_LABELS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 var GUIDE_FALLBACK = [
   { title: 'Working offline', body: 'This page could not reach the workbook. Reload once you have a connection — nothing you typed elsewhere has been lost, the workbook is always the source of truth.' }
 ];
-var EMPTY_MARK_FORM = { type: 'AF', name: '', mark: '', max: '', date: '', includeInAf: true, written: true, excused: false, notes: '', error: '', saving: false };
+var EMPTY_MARK_FORM = { type: 'AF', name: '', mark: '', max: '', date: '', includeInAf: true, written: true, excused: false, notes: '', error: '', saving: false, itemType: '', weight: '' };
+// v1.4.1 -- mirrors VALID_AF_ITEM_TYPES in AF_Components_v1.4.1_Migration.js.
+// v1.4.3 added 'Project'/'Quiz' for project+quiz-only modules (no tutorial
+// tests or practicals at all), e.g. Industrial Engineering.
+var VALID_AF_ITEM_TYPES_LIST = ['Tutorial test', 'Practical', 'Project', 'Quiz'];
 
 // ---- v1.2.0 ACADEMIC WORKFLOW RELEASE -- shared lookup tables for the new
 // Study Planner / Revision Tracker / Resources / Attendance / Module
@@ -170,6 +184,10 @@ var TASK_TYPES_LIST = ['Watch lecture', 'Review notes', 'Learn concept', 'Comple
 var SESSION_STATUSES_LIST = ['Planned', 'Completed', 'Partly completed', 'Skipped', 'Rescheduled'];
 var SESSION_STATUS_COLORS = { Planned: ['#FBEFD9', '#B58821'], Completed: ['#E4F0E9', '#3F7A5C'], 'Partly completed': ['#F3E3D2', '#8F3B23'], Skipped: ['#F7E2D8', '#8F3B23'], Rescheduled: ['#E4EEF7', '#2E6F9E'] };
 var RESOURCE_TYPES_LIST = ['Lecture', 'Lecture video', 'Tutorial', 'Past paper', 'Formula bible', 'Textbook chapter', 'Practice set', 'Flashcards', 'Summary notes', 'Mistake review', 'Other'];
+// v1.4.0 -- mirrors VALID_DRIVE_CATEGORIES in Drive_Resources_v1.4.0.js.
+var VALID_DRIVE_CATEGORIES_LIST = ['Completed tutorial tests', 'Assessment or exam', 'Questions for professors'];
+// v1.4.2 -- mirrors VALID_PRIORITY_OVERRIDES in Study_Priority_v1.4.2_Migration.js.
+var VALID_PRIORITY_OVERRIDES_LIST = ['Critical', 'Very High', 'High', 'Maintain', 'Low'];
 var RESOURCE_STATUSES_LIST = ['Not started', 'In progress', 'Completed', 'Reviewed', 'Needs redo'];
 var RESOURCE_STATUS_COLORS = { 'Not started': ['#F3E3D2', '#8A7A68'], 'In progress': ['#FBEFD9', '#B58821'], Completed: ['#E4F0E9', '#3F7A5C'], Reviewed: ['#E4F0E9', '#3F7A5C'], 'Needs redo': ['#F7E2D8', '#8F3B23'] };
 // Each resource type maps to four short progress-flag labels (Flag A-D) --
@@ -260,6 +278,7 @@ var state = {
   localAfExcused: {},
   localResourcesReviewed: {},
   localStudyDone: {},
+  localIncludeOverrides: {}, // v1.4.4 -- {moduleCode: boolean}, optimistic overlay for the Study Planner Include checkbox
   // v1.3.0 -- Deterministic Academic Intelligence UI state. Nothing here is
   // ever sent to the backend except through the explicit
   // api_activateExamFocus confirmation call -- weeklyAllocationOverrides in
@@ -282,6 +301,8 @@ var state = {
   // Nothing here is persisted except through the explicit Save action on
   // Published Final -- the Simulator is entirely read-only/on-demand.
   publishedFinalInput: {}, publishedFinalSaving: {},
+  // v1.4.0 -- mirror of the two fields above for "Published Final (After A3)".
+  publishedFinalAfterInput: {}, publishedFinalAfterSaving: {},
   whatIfInput: {}, whatIfResult: {}, whatIfLoading: {}, whatIfError: {}, whatIfOpen: {},
   // v1.3.1 2nd correction pass -- per-module, per-assessment (a1/a2/a3)
   // explicit status dropdown state (Written/Not written/Excused/Deferred),
@@ -317,6 +338,8 @@ var state = {
   studySessionFormOpen: false,
   studySessionForm: null,       // populated by openStudySessionForm_()
   studySessionEditingId: null,  // null = adding new, else the Study Session ID being edited
+  studyIncludeChecklistOpen: false, // v1.4.2 -- "Which modules?" panel on Study Planner, collapsed by default
+  studyGenPriorityOverrides: {}, // v1.4.3 -- {moduleCode: category}, session-only, sent only to the next Generate call, never saved
   independentStudyFormOpen: false,
   independentStudyForm: null,
   completingSessionId: null,    // Study Session ID currently showing its inline completion form, or null
@@ -325,10 +348,23 @@ var state = {
   newTaskTypeBySession: {},     // sessionId -> in-progress "add task" type field
   suggestionsPreview: null,     // null | { mondayIso, suggestions: [{module,topic,date,hour,duration,studyType,startTimeIso}] }
   suggestionsLoading: false,
+  suggestionsWeekOffset: 0,     // 0 = this week, 1/2/3 = that many weeks ahead -- api_generateStudySuggestions already accepts a week anchor, this just lets the UI pick one
+  // v1.4.0 -- lazy-loaded (like the Weekly screen's own preview) the first
+  // time the Calendar screen opens. null = not fetched yet this session.
+  externalCalendarEvents: null, externalCalendarLoading: false, externalCalendarReason: null,
 
   resourceFormOpen: false,
   resourceForm: null,
   resourceEditingId: null,
+  // v1.4.0 -- Drive upload form (separate from resourceForm above, which
+  // stays the existing text-reference-only flow). fileChosenName is purely
+  // a label for what's currently selected -- the actual File object lives
+  // in the DOM file input itself (see saveDriveUpload_), never in state,
+  // since a File object can't be kept across a render() rebuild anyway.
+  driveUploadFormOpen: false,
+  driveUploadForm: null,
+  driveUploadSaving: false,
+  driveUploadFileChosenName: '',
 
   revisionFormOpen: false,
   revisionForm: null,
@@ -632,6 +668,19 @@ function setView(id) {
   // data (e.g. Study Suggestions) rather than folding it into the single
   // api_getPlannerData payload every screen already shares.
   if (id === 'semester' && !state.semData && !state.semLoading) loadSemesterDashboard_();
+  // v1.4.0 -- same lazy-load pattern, for events pulled live from Google
+  // Calendar (see api_getExternalCalendarEvents / buildExternalCalendarEvents_).
+  if (id === 'calendar' && !state.externalCalendarEvents && !state.externalCalendarLoading) loadExternalCalendarEvents_();
+}
+function loadExternalCalendarEvents_() {
+  state.externalCalendarLoading = true; render();
+  runScript_('api_getExternalCalendarEvents', []).then(function (res) {
+    state.externalCalendarLoading = false;
+    if (!res.ok) { state.externalCalendarReason = 'Could not load Google Calendar events: ' + res.error; render(); return; }
+    state.externalCalendarEvents = res.data.events;
+    state.externalCalendarReason = res.data.reason;
+    render();
+  });
 }
 
 // ---- Academic Inbox ----
@@ -743,7 +792,31 @@ function toggleInboxProcessed(inboxId, current) {
 // message explicitly distinguishes the already-processed case, per the
 // requirement that deleting the capture must never be confused with
 // deleting whatever it was filed as.
-function deleteInboxItem(inboxId, title, processed, filedType) {
+// v1.4.0 -- when the item was already filed AND its filed record can still
+// be resolved (filedId), a genuine choice is offered instead of a single
+// confirm, mirroring the Workbook-only / Workbook+Calendar pattern already
+// used for Assignment/Assessment/Study-session delete: "Inbox entry only"
+// vs. also deleting the filed record (and its Calendar event, if any).
+// Fixes the Agenda panel appearing to "not update" after deleting a
+// smoke-test/duplicate Inbox item -- the filed Assignment/Assessment it
+// created was never actually gone, just the capture that filed it.
+function deleteInboxItem(inboxId, title, processed, filedType, filedId) {
+  if (processed && filedId) {
+    var filedList = filedType === 'Assessment' ? (state.raw && state.raw.assessments) : (state.raw && state.raw.assignments);
+    var filedRecord = (filedList || []).filter(function (r) { return r.id === filedId; })[0];
+    var hasCalendarEvent = !!(filedRecord && filedRecord.calendarEventId);
+    var choices = [
+      { label: 'Inbox entry only', action: 'doDeleteInboxItem', args: [inboxId] },
+      { label: 'Inbox entry + filed ' + filedType, action: 'doDeleteInboxItemAndFiled', args: [inboxId, filedType, filedId, false], primary: !hasCalendarEvent }
+    ];
+    if (hasCalendarEvent) {
+      choices.push({ label: 'Inbox entry + filed ' + filedType + ' + Calendar event', action: 'doDeleteInboxItemAndFiled', args: [inboxId, filedType, filedId, true], primary: true });
+    }
+    openChoiceModal('Delete "' + title + '"?',
+      'This was already filed as ' + (filedType === 'Assessment' ? 'an Assessment' : 'an Assignment') + '. Choose what to delete:',
+      choices);
+    return;
+  }
   var msg = processed
     ? 'Delete the Inbox capture "' + title + '"? This only removes the Inbox entry itself — the ' +
       (filedType || 'Assignment or Assessment') + ' it was already filed as is NOT deleted.'
@@ -758,6 +831,22 @@ function doDeleteInboxItem(inboxId) {
     state.saving[key] = false;
     if (res.ok) {
       showToast_('success', 'Inbox item deleted.');
+      loadPlannerData();
+    } else {
+      showToast_('error', 'Could not delete: ' + res.error);
+      render();
+    }
+  });
+}
+function doDeleteInboxItemAndFiled(inboxId, filedType, filedId, deleteCalendarEvent) {
+  var key = 'inboxDelete_' + inboxId;
+  if (state.saving[key]) return; // double-submit guard
+  state.saving[key] = true; render();
+  runScript_('api_deleteInboxItemAndFiled', [inboxId, filedType, filedId, !!deleteCalendarEvent]).then(function (res) {
+    state.saving[key] = false;
+    if (res.ok) {
+      var calNote = (res.data.filed && res.data.filed.calendarResult === 'Deleted') ? ' — Calendar event removed too.' : '.';
+      showToast_('success', 'Inbox item and filed ' + filedType + ' deleted' + calNote);
       loadPlannerData();
     } else {
       showToast_('error', 'Could not delete: ' + res.error);
@@ -994,16 +1083,25 @@ function toggleMarkIncludeInAf(code) { var f = getMarkForm_(code); setMarkField_
 function toggleMarkWritten(code) { var f = getMarkForm_(code); setMarkField_(code, 'written', !f.written); render(); }
 function toggleMarkExcused(code) { var f = getMarkForm_(code); setMarkField_(code, 'excused', !f.excused); render(); }
 
-function saveMarkEntry(code, moduleName) {
+function saveMarkEntry(code, moduleName, moduleAfItemType) {
   var form = getMarkForm_(code);
   if (form.saving) return; // double-submit guard
   var mark = parseFloat(form.mark), max = parseFloat(form.max);
   if (form.type === 'AF' && !(form.name || '').trim()) { setMarkField_(code, 'error', 'Give this assessment a name (e.g. "Tutorial Test 4").'); render(); return; }
   if (!Number.isFinite(mark) || !Number.isFinite(max) || max <= 0) { setMarkField_(code, 'error', 'Enter a valid mark and maximum mark.'); render(); return; }
   if (mark < 0 || mark > max * 1.05) { setMarkField_(code, 'error', 'Mark should be between 0 and the maximum.'); render(); return; }
+  // v1.4.1 -- Item type: locked to the module's own AF item type when set
+  // (markCardFormHtml_'s disabled <select> never fires onchange, so
+  // form.itemType alone can't be trusted for a locked module -- resolve it
+  // here instead), otherwise whatever was chosen in the dropdown, which
+  // must be non-blank for an AF entry.
+  var lockedItemType = moduleAfItemType === 'Tutorial tests' ? 'Tutorial test' : moduleAfItemType === 'Practicals' ? 'Practical' : null;
+  var itemType = lockedItemType || form.itemType;
+  if (form.type === 'AF' && !itemType) { setMarkField_(code, 'error', 'Choose an item type (Tutorial test or Practical).'); render(); return; }
+  var payload = Object.assign({}, form, { itemType: itemType });
   state.markForms[code] = Object.assign({}, form, { saving: true, error: '' });
   render();
-  runScript_('api_addMarkEntry', [code, moduleName, form]).then(function (res) {
+  runScript_('api_addMarkEntry', [code, moduleName, payload]).then(function (res) {
     if (!res.ok) {
       state.markForms[code] = Object.assign({}, form, { saving: false, error: res.error });
       showToast_('error', 'Could not save mark: ' + res.error);
@@ -1288,6 +1386,7 @@ function emptyViewModel_(message) {
     navGroups: [], allNavFlat: [], modules: [], legendModules: [],
     todayClasses: [], todayTutorials: [], nextAssessmentLabel: null, hoursByModule: [], moduleHealth: [], phases: [],
     weekdayLabels: WEEKDAY_LABELS, calendarDays: [], weekDays: [],
+    externalCalendarLoading: false, externalCalendarReason: null,
     weekDaysForDisplay: [], weeklyRangeLabel: '', weeklyIsCurrentWeek: true, weeklyAllEmpty: false, weeklyLoading: false, weeklyFirstTeachingWeekIso: null,
     calendarMonthLabel: state.booted ? 'Unavailable' : 'Loading…', calendarPhaseLabel: '',
     moduleFilterChips: [], agendaItems: [], countdowns: [],
@@ -1299,8 +1398,10 @@ function emptyViewModel_(message) {
     // v1.2.0 -- defaults so a pre-boot/error render never throws reading these.
     studySessionFormOpen: false, studySessionForm: null, studySessionEditingId: null,
     independentStudyFormOpen: false, independentStudyForm: null,
-    suggestionsPreview: null, suggestionsLoading: false,
+    suggestionsPreview: null, suggestionsLoading: false, suggestionsWeekOffset: 0,
+    externalCalendarEvents: null, externalCalendarLoading: false, externalCalendarReason: null,
     resourceFormOpen: false, resourceForm: null, resourceEditingId: null,
+    driveUploadFormOpen: false, driveUploadForm: null, driveUploadSaving: false, driveUploadFileChosenName: '',
     revisionFormOpen: false, revisionForm: null, revisionEditForm: null,
     moduleConfigFormOpenByCode: {}, moduleConfigForms: {},
     // v1.3.0 -- defaults so a pre-boot/error render never throws reading these.
@@ -1314,6 +1415,7 @@ function emptyViewModel_(message) {
     // v1.3.1 Marks Intelligence Completion -- defaults so a pre-boot/error
     // render never throws reading these.
     publishedFinalInput: {}, publishedFinalSaving: {},
+    publishedFinalAfterInput: {}, publishedFinalAfterSaving: {},
     whatIfInput: {}, whatIfResult: {}, whatIfLoading: {}, whatIfError: {}, whatIfOpen: {},
     // v1.3.1 2nd correction pass -- defaults so a pre-boot/error render never throws reading these.
     assessmentStatusInput: {}, assessmentStatusSaving: {}, dcaMarkInput: {}, dcaMarkSaving: {},
@@ -1368,15 +1470,29 @@ function computeViewModel() {
   var legendModules = modules.map(function (m) { return { name: m.short, color: m.color }; });
 
   var filterActive = state.calendarFilter;
+  // v1.4.0 -- fold in events pulled live from Google Calendar (see
+  // loadExternalCalendarEvents_) that this workbook didn't itself create --
+  // e.g. added directly in Google Calendar. Matched purely by day-of-month
+  // since both raw.calendarDays and api_getExternalCalendarEvents are
+  // always the current month. Given a distinct look (dashed border, 📅
+  // prefix) so they read as "from Google Calendar", not a planner item.
+  var externalByDayNum = {};
+  (state.externalCalendarEvents || []).forEach(function (ev) {
+    var dayNum = parseInt((ev.date || '').split('-')[2], 10);
+    if (!dayNum) return;
+    (externalByDayNum[dayNum] = externalByDayNum[dayNum] || []).push(ev);
+  });
   var calendarDays = raw.calendarDays.map(function (day) {
-    return Object.assign({}, day, {
-      events: day.events.map(function (ev) {
-        if (!filterActive) return ev;
-        var mod = byId[filterActive];
-        var matches = mod && ev.label && ev.label.indexOf(mod.name) === 0;
-        return matches ? ev : Object.assign({}, ev, { color: MUTED_COLOR });
-      })
+    var ownEvents = day.events.map(function (ev) {
+      if (!filterActive) return ev;
+      var mod = byId[filterActive];
+      var matches = mod && ev.label && ev.label.indexOf(mod.name) === 0;
+      return matches ? ev : Object.assign({}, ev, { color: MUTED_COLOR });
     });
+    var externalEvents = (day.num && externalByDayNum[day.num] || []).map(function (ev) {
+      return { label: '📅 ' + ev.title, color: MUTED_COLOR, external: true };
+    });
+    return Object.assign({}, day, { events: ownEvents.concat(externalEvents) });
   });
   var weekDays = raw.weekDays;
 
@@ -1491,7 +1607,7 @@ function computeViewModel() {
     }
     return {
       id: it.id, title: it.title, module: it.module, type: it.type, due: it.dueDate || 'TBC', processed: it.processed,
-      filedType: it.filedType || '',
+      filedType: it.filedType || '', filedId: it.filedId || '',
       strike: it.processed ? 'text-decoration:line-through;color:#8A7A68;' : '',
       statusLabel: statusLabel, statusBg: statusBg, statusColor: statusColor
     };
@@ -1548,7 +1664,8 @@ function computeViewModel() {
     var a1Entered = typeof mt.a1 === 'number';
     var common = {
       code: m.code, formOpen: formOpen, form: Object.assign({}, form, { pct: livePct }), recentAf: recentAf, hasRecentAf: recentAf.length > 0,
-      formToggleLabel: formOpen ? '✕ Cancel' : '+ Add Assessment', a1Entered: a1Entered
+      formToggleLabel: formOpen ? '✕ Cancel' : '+ Add Assessment', a1Entered: a1Entered,
+      afItemType: m.afItemType || '' // v1.4.1 -- "Tutorial tests"/"Practicals"/"" -- locks markCardFormHtml_'s Item type choice
     };
     if (isMissing) return Object.assign({ module: m.short, color: m.color, status: 'Missing', statusBg: '#F7E2D8', statusColor: '#8F3B23', hasData: false, missing: true, editableAf: false }, common);
     var editableAf = m.code === ELECTRO_CODE;
@@ -1568,32 +1685,37 @@ function computeViewModel() {
     return { module: m.name, af: m.afWeight != null ? Math.round(m.afWeight * 100) + '%' : 'Unknown', a1: m.a1Weight != null ? Math.round(m.a1Weight * 100) + '%' : 'Unknown', a2: m.a2Weight != null ? Math.round(m.a2Weight * 100) + '%' : 'Unknown', status: m.ruleStatus, statusBg: colors[0], statusColor: colors[1], note: m.generalNotes || '' };
   });
 
-  var afTemplateByCode = {};
-  afTemplateByCode['20753-154'] = [['Class Test 1', '6%'], ['Class Test 2', '6%'], ['Tutorial Tests', '3%']];
-  afTemplateByCode['38571-145'] = [['Class Test 1', '5%'], ['Class Test 2', '5%']];
-  afTemplateByCode['19712-143'] = [['Class Tests (avg)', '9%'], ['Tutorial Tests (avg)', '6%']];
-  afTemplateByCode[ELECTRO_CODE] = [['Combined AF (manual entry — internal split not yet confirmed)', 'Not yet confirmed']];
-  var afWrittenByKey = {}, afExcusedByKey = {};
-  raw.afComponents.forEach(function (item) {
-    var mod = byName[item.module];
-    if (!mod) return;
-    var key = mod.code + '__' + item.itemName;
-    afWrittenByKey[key] = item.written; afExcusedByKey[key] = item.excused;
-  });
-  var afGroups = Object.keys(afTemplateByCode).map(function (code) {
-    var mod = byCode[code];
-    if (!mod) return null;
+  // v1.4.1 -- afGroups is now a live view of "10 AF Components" itself,
+  // grouped by module, instead of a hardcoded per-module checklist template
+  // (afTemplateByCode, retired). Only ever shows real entries, which can
+  // now only ever be tagged Tutorial test or Practical (see
+  // markCardFormHtml_/api_addMarkEntry) -- so this screen naturally only
+  // shows those two categories, works for every active module (the old
+  // template covered 4 of 6), and each item's real Weight is shown instead
+  // of a fixed, made-up percentage label. Written/Excused toggles still go
+  // through api_setAfFlag, which already matches by (module, item name) --
+  // the exact same identity a real entry already has, so no backend change
+  // was needed for the toggles themselves.
+  var afGroups = modules.filter(function (m) { return m.active; }).map(function (m) {
+    var entries = raw.afComponents.filter(function (c) { return c.module === m.name && c.itemName; })
+      .sort(function (a, b) { return (a.date || '').localeCompare(b.date || '') || a.itemName.localeCompare(b.itemName); });
     return {
-      module: mod.short, color: mod.color,
-      items: afTemplateByCode[code].map(function (pair) {
-        var name = pair[0], weight = pair[1];
-        var key = code + '__' + name;
-        var written = (key in state.localAfWritten) ? state.localAfWritten[key] : !!afWrittenByKey[key];
-        var excused = (key in state.localAfExcused) ? state.localAfExcused[key] : !!afExcusedByKey[key];
-        return { name: name, weight: weight, key: key, moduleName: mod.name, writtenStyle: written ? CHECK_ON : CHECK_OFF, excusedStyle: excused ? CHECK_ON : CHECK_OFF };
+      module: m.short, color: m.color, moduleName: m.name, afItemType: m.afItemType || '',
+      items: entries.map(function (item) {
+        var key = m.code + '__' + item.itemName;
+        var written = (key in state.localAfWritten) ? state.localAfWritten[key] : !!item.written;
+        var excused = (key in state.localAfExcused) ? state.localAfExcused[key] : !!item.excused;
+        return {
+          name: item.itemName, itemType: item.itemType || '—',
+          weight: (typeof item.weight === 'number') ? item.weight : '—',
+          pct: (typeof item.pct === 'number') ? Math.round(item.pct * 10) / 10 + '%' : '—',
+          date: item.date ? formatLocalDateOnly_(item.date) : '',
+          included: item.included,
+          key: key, moduleName: m.name, writtenStyle: written ? CHECK_ON : CHECK_OFF, excusedStyle: excused ? CHECK_ON : CHECK_OFF
+        };
       })
     };
-  }).filter(Boolean);
+  });
 
   // v1.2.0 -- task-based Study Planner: group raw.studyTasks by session ID
   // once, here, so every session card below can just look up its own tasks
@@ -1788,6 +1910,7 @@ function computeViewModel() {
     todayClasses: todayClasses, todayTutorials: todayTutorials, countdowns: countdowns, nextAssessmentLabel: nextAssessmentLabel,
     hoursByModule: hoursByModule, totalHours: Math.round(totalHours * 10) / 10, moduleHealth: moduleHealth, phases: phases, todayStudyBlock: todayStudyBlock,
     weekdayLabels: WEEKDAY_LABELS, calendarDays: calendarDays, weekDays: weekDays,
+    externalCalendarLoading: state.externalCalendarLoading, externalCalendarReason: state.externalCalendarReason,
     weekDaysForDisplay: weeklyView.weekDays,
     weeklyRangeLabel: formatWeekRangeLabel_(weeklyView.mondayIso, weeklyView.fridayIso),
     weeklyIsCurrentWeek: !!weeklyView.isCurrentWeek,
@@ -1805,7 +1928,10 @@ function computeViewModel() {
     studySessionFormOpen: state.studySessionFormOpen, studySessionForm: state.studySessionForm, studySessionEditingId: state.studySessionEditingId,
     independentStudyFormOpen: state.independentStudyFormOpen, independentStudyForm: state.independentStudyForm,
     suggestionsPreview: state.suggestionsPreview, suggestionsLoading: state.suggestionsLoading,
+    suggestionsWeekOffset: state.suggestionsWeekOffset,
     resourceFormOpen: state.resourceFormOpen, resourceForm: state.resourceForm, resourceEditingId: state.resourceEditingId,
+    driveUploadFormOpen: state.driveUploadFormOpen, driveUploadForm: state.driveUploadForm, driveUploadSaving: state.driveUploadSaving,
+    driveUploadFileChosenName: state.driveUploadFileChosenName,
     revisionFormOpen: state.revisionFormOpen, revisionForm: state.revisionForm, revisionEditForm: state.revisionEditForm,
     moduleConfigFormOpenByCode: state.moduleConfigFormOpenByCode, moduleConfigForms: state.moduleConfigForms,
     todayLabelFull: DAY_NAMES[now.getDay()].toUpperCase() + ' · ' + now.getDate() + ' ' + MONTH_NAMES[now.getMonth()].toUpperCase() + ' ' + now.getFullYear(),
@@ -1835,13 +1961,17 @@ function computeViewModel() {
     // input field below can default to what's already saved.
     marksIntelligence: (raw.marksIntelligence || []).map(function (mi) {
       var mt = (raw.marksTracker || []).filter(function (r) { return r.module === mi.name; })[0];
-      return Object.assign({}, mi, { publishedFinalBeforeA3: mt ? mt.publishedFinalBeforeA3 : null });
+      return Object.assign({}, mi, {
+        publishedFinalBeforeA3: mt ? mt.publishedFinalBeforeA3 : null,
+        publishedFinalAfterA3: mt ? mt.publishedFinalAfterA3 : null
+      });
     }),
     a3CustomTargetInput: state.a3CustomTargetInput, a3CustomResult: state.a3CustomResult,
     a3CustomLoading: state.a3CustomLoading, a3CustomError: state.a3CustomError,
     marksIntelligenceExpanded: state.marksIntelligenceExpanded,
     // v1.3.1 Marks Intelligence Completion -- pure local UI state pass-through.
     publishedFinalInput: state.publishedFinalInput, publishedFinalSaving: state.publishedFinalSaving,
+    publishedFinalAfterInput: state.publishedFinalAfterInput, publishedFinalAfterSaving: state.publishedFinalAfterSaving,
     whatIfInput: state.whatIfInput, whatIfResult: state.whatIfResult, whatIfLoading: state.whatIfLoading,
     whatIfError: state.whatIfError, whatIfOpen: state.whatIfOpen,
     // v1.3.1 2nd correction pass -- pure local UI state pass-through.
@@ -2172,8 +2302,14 @@ function screenCalendar_(vm) {
       '<div style="font-size:11px;font-weight:700;color:#B24B2E;">' + esc(ag.daysLabel) + '</div></div>';
   }).join('') : '<div style="font-size:13px;color:#8A7A68;">Nothing due in the next 14 days.</div>';
 
+  var externalBanner = vm.externalCalendarLoading
+    ? '<div style="font-size:12px;color:#8A7A68;margin-bottom:10px;">Checking Google Calendar for events added outside the planner… <span class="ep-spin" style="display:inline-block;">⟳</span></div>'
+    : (vm.externalCalendarReason
+      ? '<div style="font-size:12px;color:#8A7A68;margin-bottom:10px;">' + esc(vm.externalCalendarReason) + '</div>'
+      : '<div style="font-size:11px;color:#8A7A68;margin-bottom:10px;">📅 = added directly in Google Calendar, not by the planner. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('loadExternalCalendarEvents_', []) + '">Refresh</span></div>');
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">' + esc(vm.calendarMonthLabel) + '</div>' +
-    '<div style="font-size:14px;color:#8A7A68;margin-bottom:18px;">' + esc(vm.calendarPhaseLabel) + '</div>' +
+    '<div style="font-size:14px;color:#8A7A68;margin-bottom:6px;">' + esc(vm.calendarPhaseLabel) + '</div>' +
+    externalBanner +
     '<div style="display:flex;gap:20px;align-items:flex-start;">' +
     '<div style="width:220px;flex-shrink:0;background:#FDF6F0;border:1px solid #F0DCC8;border-radius:16px;padding:16px;">' +
     '<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#B24B2E;margin-bottom:8px;">LEGEND</div>' + legend +
@@ -2196,14 +2332,49 @@ function screenWeekly_(vm) {
   var legend = vm.legendModules.map(function (l) {
     return '<div style="display:flex;align-items:center;gap:6px;background:#FDF6F0;border:1px solid #F0DCC8;border-radius:20px;padding:5px 12px;"><div style="width:9px;height:9px;border-radius:3px;background:' + l.color + ';"></div><div style="font-size:12px;font-weight:600;">' + esc(l.name) + '</div></div>';
   }).join('');
+  // v1.4.0 -- shared time-grid instead of each day independently stacking
+  // its own sessions in order. Previously an 08:00 class and a 10:00 class
+  // on different days both rendered as their column's first card, lined up
+  // with each other despite being 2 hours apart -- now every day column is
+  // the same height, spanning the same clock-time range, and each session
+  // is positioned/sized within it by its real startMin/endMin (added to
+  // buildWeekForDate_'s payload for exactly this).
+  var HOUR_PX = 60; // 1 hour of real time = 60px of column height
+  var allMins = [];
+  vm.weekDaysForDisplay.forEach(function (day) {
+    (day.sessions || []).forEach(function (s) {
+      if (typeof s.startMin === 'number') allMins.push(s.startMin);
+      if (typeof s.endMin === 'number') allMins.push(s.endMin);
+    });
+  });
+  var rangeStartMin = allMins.length ? Math.floor(Math.min.apply(null, allMins) / 60) * 60 : 8 * 60;
+  var rangeEndMin = allMins.length ? Math.ceil(Math.max.apply(null, allMins) / 60) * 60 : 17 * 60;
+  if (rangeEndMin <= rangeStartMin) rangeEndMin = rangeStartMin + 60;
+  var trackHeight = (rangeEndMin - rangeStartMin) * (HOUR_PX / 60);
+  var trackVars = 'height:' + trackHeight + 'px;--ep-week-hour-px:' + HOUR_PX + 'px;';
+
+  var hourLabels = '';
+  for (var h = rangeStartMin; h <= rangeEndMin; h += 60) {
+    var hh = Math.floor(h / 60);
+    hourLabels += '<div class="ep-week-hourlabel" style="top:' + ((h - rangeStartMin) * (HOUR_PX / 60)) + 'px;">' + (hh < 10 ? '0' + hh : hh) + ':00</div>';
+  }
+  var rulerCard = '<div style="min-width:0;">' +
+    '<div style="font-size:12.5px;font-weight:700;border-bottom:2px solid transparent;padding-bottom:8px;margin-bottom:10px;visibility:hidden;">·</div>' +
+    '<div class="ep-week-hourcol" style="' + trackVars + '">' + hourLabels + '</div></div>';
+
   var days = vm.weekDaysForDisplay.map(function (day) {
     var sessions = (day.sessions || []).map(function (s) {
-      return '<div style="background:' + s.color + ';color:#fff;border-radius:10px;padding:9px 10px;margin-bottom:7px;overflow:hidden;">' +
-        '<div style="font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(s.module) + '</div>' +
-        '<div style="font-size:11px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(s.time) + ' · ' + esc(s.type) + '</div></div>';
-    }).join('') || '<div style="font-size:12px;color:#8A7A68;">No classes.</div>';
+      var hasTiming = typeof s.startMin === 'number';
+      var top = hasTiming ? (Math.max(s.startMin, rangeStartMin) - rangeStartMin) * (HOUR_PX / 60) : 0;
+      var durMin = (hasTiming && typeof s.endMin === 'number' && s.endMin > s.startMin) ? (s.endMin - s.startMin) : 60;
+      var height = Math.max(durMin * (HOUR_PX / 60), 34); // floor so short sessions stay readable
+      return '<div class="ep-week-session-abs" style="top:' + top + 'px;height:' + height + 'px;background:' + s.color + ';color:#fff;">' +
+        '<div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(s.module) + '</div>' +
+        '<div style="font-size:10.5px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(s.time) + ' · ' + esc(s.type) + '</div></div>';
+    }).join('') || '<div style="position:absolute;top:0;left:0;right:0;text-align:center;font-size:12px;color:#8A7A68;padding-top:8px;">No classes.</div>';
     return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:16px;padding:14px;min-width:0;">' +
-      '<div style="font-size:12.5px;font-weight:700;letter-spacing:1px;color:#3B332B;border-bottom:2px solid #DD7A56;padding-bottom:8px;margin-bottom:10px;">' + esc(day.label) + '</div>' + sessions + '</div>';
+      '<div style="font-size:12.5px;font-weight:700;letter-spacing:1px;color:#3B332B;border-bottom:2px solid #DD7A56;padding-bottom:8px;margin-bottom:10px;">' + esc(day.label) + '</div>' +
+      '<div class="ep-week-track" style="' + trackVars + '">' + sessions + '</div></div>';
   }).join('');
 
   // v1.1.12 master -- Feature 10: Prev/This week/Next controls + range label
@@ -2232,7 +2403,7 @@ function screenWeekly_(vm) {
     '<div style="font-size:14px;color:#8A7A68;margin-bottom:14px;">Source of truth: ICS timetable import · applies every week of the semester</div>' +
     navControls + banner + emptyBanner +
     '<div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">' + legend + '</div>' +
-    '<div class="ep-week-scroll"><div class="ep-week-grid">' + days + '</div></div></div>';
+    '<div class="ep-week-scroll"><div class="ep-week-grid">' + rulerCard + days + '</div></div></div>';
 }
 
 // v1.1.12 -- feature 2 button-label sequence: Add to Inbox -> Adding… ->
@@ -2268,7 +2439,7 @@ function screenInbox_(vm) {
       '<div style="flex:1;"><div style="font-weight:700;font-size:14.5px;' + it.strike + '">' + esc(it.title) + '</div>' +
       '<div style="font-size:12.5px;color:#8A7A68;">' + esc(it.module) + ' · ' + esc(it.type) + ' · due ' + esc(it.due) + '</div></div>' +
       '<div style="font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px;background:' + it.statusBg + ';color:' + it.statusColor + ';">' + esc(it.statusLabel) + '</div>' +
-      '<div class="ep-clickable" onclick="' + h_('deleteInboxItem', [it.id, it.title, it.processed, it.filedType]) + '" style="font-size:11.5px;font-weight:700;color:#8F3B23;cursor:pointer;padding:6px 10px;">Delete</div></div>';
+      '<div class="ep-clickable" onclick="' + h_('deleteInboxItem', [it.id, it.title, it.processed, it.filedType, it.filedId]) + '" style="font-size:11.5px;font-weight:700;color:#8F3B23;cursor:pointer;padding:6px 10px;">Delete</div></div>';
   }).join('') : '<div style="font-size:13px;color:#8A7A68;">Nothing captured yet.</div>';
 
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Academic Inbox</div>' +
@@ -2338,9 +2509,28 @@ function markCardFormHtml_(m) {
     var labels = { AF: 'AF item (class/tutorial test)', A1: 'A1', A2: 'A2', A3: 'A3' };
     return '<option value="' + t + '"' + (f.type === t ? ' selected' : '') + '>' + labels[t] + '</option>';
   }).join('');
+  // v1.4.1 -- Item type is locked to whichever single option matches this
+  // module's "AF item type" (04 Module Rules), if set; otherwise both
+  // Tutorial test / Practical are offered and a choice is required. Weight
+  // is always optional, for every module -- blank behaves exactly like
+  // today (plain average), see AF_Components_v1.4.1_Migration.js.
+  var itemTypeBlock = '';
+  if (f.type === 'AF') {
+    var lockedTo = m.afItemType === 'Tutorial tests' ? 'Tutorial test' : m.afItemType === 'Practicals' ? 'Practical' : null;
+    var itemTypeChoices = lockedTo ? [lockedTo] : VALID_AF_ITEM_TYPES_LIST;
+    var itemTypeSelected = lockedTo || f.itemType;
+    var itemTypeOptions = (lockedTo ? [] : [['', 'Item type…']]).concat(itemTypeChoices.map(function (t) { return [t, t]; }))
+      .map(function (pair) { return '<option value="' + pair[0] + '"' + (itemTypeSelected === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    itemTypeBlock = '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<select ' + (lockedTo ? 'disabled' : ('onchange="' + hv_('setMarkField_', [m.code, 'itemType']) + '"')) + ' style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;' + (lockedTo ? 'opacity:0.7;' : '') + '">' + itemTypeOptions + '</select>' +
+      '<input type="number" min="0" step="0.1" value="' + escAttr(f.weight) + '" oninput="' + hv_('setMarkField_', [m.code, 'weight']) + '" placeholder="Weight (optional)" title="Optional -- how much this test counts relative to others. Blank = counts the same as an ordinary test." style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
+      '</div>' +
+      (lockedTo ? '' : '<div style="font-size:11px;color:#8A7A68;">Set this module\'s AF item type in 04 Module Rules to lock this choice.</div>');
+  }
   return '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">' +
     '<select onchange="' + hv_('setMarkTypeSel', [m.code]) + '" style="padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:13px;font-family:\'Inter\',sans-serif;">' + typeOptions + '</select>' +
     '<input value="' + escAttr(f.name) + '" oninput="' + hv_('setMarkField_', [m.code, 'name']) + '" placeholder="Assessment name (e.g. Tutorial Test 4)" style="padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
+    itemTypeBlock +
     '<div style="display:flex;gap:8px;align-items:center;">' +
     '<input type="number" value="' + escAttr(f.mark) + '" oninput="' + hv_('setMarkFieldLive_', [m.code, 'mark']) + '" placeholder="Mark" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
     '<input type="number" value="' + escAttr(f.max) + '" oninput="' + hv_('setMarkFieldLive_', [m.code, 'max']) + '" placeholder="Max" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
@@ -2355,7 +2545,7 @@ function markCardFormHtml_(m) {
     '</div>' +
     (f.error ? '<div style="font-size:12px;color:#8F3B23;background:#F7E2D8;border-radius:8px;padding:8px 10px;">' + esc(f.error) + '</div>' : '') +
     '<div style="display:flex;gap:8px;">' +
-    '<div class="ep-clickable" onclick="' + h_('saveMarkEntry', [m.code, m.module]) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;' + (f.saving ? 'opacity:0.6;pointer-events:none;' : '') + '">' + (f.saving ? 'Saving…' : 'Save') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('saveMarkEntry', [m.code, m.module, m.afItemType]) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;' + (f.saving ? 'opacity:0.6;pointer-events:none;' : '') + '">' + (f.saving ? 'Saving…' : 'Save') + '</div>' +
     '<div class="ep-clickable" onclick="' + h_('toggleMarkForm', [m.code]) + '" style="flex:1;text-align:center;background:#F3E3D2;color:#3B332B;font-weight:600;font-size:13px;padding:10px;border-radius:8px;cursor:pointer;">Cancel</div>' +
     '</div></div>';
 }
@@ -2405,17 +2595,23 @@ function screenMarks_(vm) {
 
 function screenAf_(vm) {
   var groups = vm.afGroups.map(function (g) {
-    var items = g.items.map(function (i) {
-      return '<div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #F3E3D2;">' +
-        '<div style="flex:1;font-size:14px;font-weight:600;">' + esc(i.name) + '</div>' +
-        '<div style="font-size:13px;color:#8A7A68;width:70px;">' + esc(i.weight) + '</div>' +
+    var items = g.items.length ? g.items.map(function (i) {
+      return '<div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
+        '<div style="flex:1;min-width:140px;font-size:14px;font-weight:600;">' + esc(i.name) + '</div>' +
+        '<div style="font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:#F3E3D2;color:#3B332B;">' + esc(i.itemType) + '</div>' +
+        '<div style="font-size:12px;color:#8A7A68;width:70px;" title="Weight (blank = counts the same as an ordinary test)">Weight: ' + esc(i.weight) + '</div>' +
+        '<div style="font-size:12px;color:#8A7A68;width:60px;">' + esc(i.pct) + '</div>' +
+        '<div style="font-size:11px;color:#8A7A68;width:80px;">' + esc(i.date) + '</div>' +
+        '<div style="font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:20px;' + (i.included ? 'background:#E4F0E9;color:#3F7A5C;' : 'background:#F7E2D8;color:#8F3B23;') + '">' + (i.included ? 'Included' : 'Not included') + '</div>' +
         '<div class="ep-clickable" onclick="' + h_('toggleAfWritten', [i.key, i.moduleName, i.name]) + '" style="' + i.writtenStyle + '"></div>' +
-        '<div style="font-size:11.5px;color:#8A7A68;width:60px;">Written</div>' +
+        '<div style="font-size:11.5px;color:#8A7A68;width:55px;">Written</div>' +
         '<div class="ep-clickable" onclick="' + h_('toggleAfExcused', [i.key, i.moduleName, i.name]) + '" style="' + i.excusedStyle + '"></div>' +
-        '<div style="font-size:11.5px;color:#8A7A68;width:60px;">Excused</div></div>';
-    }).join('');
-    return '<div style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+        '<div style="font-size:11.5px;color:#8A7A68;width:55px;">Excused</div></div>';
+    }).join('') : '<div style="padding:14px 18px;font-size:12.5px;color:#8A7A68;">No AF entries yet for this module. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('setView', ['marks']) + '">Add one from Marks Tracker.</span></div>';
+    var itemTypeNote = g.afItemType ? '' : '<div style="font-size:11px;color:#8A7A68;margin-bottom:6px;">AF item type not yet set for this module — set it in "04 Module Rules" (Tutorial tests / Practicals).</div>';
+    return '<div style="margin-bottom:20px;"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
       '<div style="width:10px;height:10px;border-radius:3px;background:' + g.color + ';"></div><div style="font-weight:800;font-size:16px;">' + esc(g.module) + '</div></div>' +
+      itemTypeNote +
       '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;">' + items + '</div></div>';
   }).join('');
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">AF Components</div>' +
@@ -2496,7 +2692,7 @@ function suggestionsPreviewHtml_(vm) {
   var p = vm.suggestionsPreview;
   if (!p) return '';
   if (!p.suggestions.length) {
-    return '<div style="background:#F9EFE3;border-radius:12px;padding:14px 16px;font-size:13px;color:#8A7A68;margin-bottom:20px;">No free slots found for that week — fully booked by classes, or already covered by existing sessions. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('closeSuggestions_', []) + '">Dismiss</span></div>';
+    return '<div style="background:#F9EFE3;border-radius:12px;padding:14px 16px;font-size:13px;color:#8A7A68;margin-bottom:20px;">' + esc(p.emptyReason || 'No free slots found for that week — fully booked by classes, or already covered by existing sessions.') + ' <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('closeSuggestions_', []) + '">Dismiss</span></div>';
   }
   var moduleOptionsFor = function (chosen) {
     return '<option value="">Module…</option>' + vm.modules.map(function (m) {
@@ -2580,15 +2776,56 @@ function studySessionCardHtml_(s) {
     '</div>';
 }
 
+// v1.4.2 -- quick "which modules?" checklist, shown collapsed by default
+// above the Generate controls. Include is still a saved setting
+// (quickToggleStudyInclude_, unchanged). Priority (v1.4.3) is NOT saved --
+// state.studyGenPriorityOverrides is plain session state, sent alongside
+// the week offset only when you click Generate (see doGenerateSuggestions_
+// / api_generateStudySuggestions), never written to any sheet. This
+// replaces v1.4.2's persistent "Manual priority override" column, which
+// kept silently overriding the computed category indefinitely once set.
+function studyIncludeChecklistHtml_(vm) {
+  var priorityByCode = {};
+  (vm.priorities || []).forEach(function (p) { priorityByCode[p.code] = p; });
+  var rows = vm.modules.filter(function (m) { return m.active; }).map(function (m) {
+    var p = priorityByCode[m.code];
+    var hasComputed = p && p.category !== 'Rules Incomplete' && p.category !== 'Insufficient data';
+    var sessionOverride = state.studyGenPriorityOverrides[m.code] || '';
+    var blankLabel = hasComputed ? ('Computed: ' + p.category) : 'No priority yet — choose one…';
+    var priorityOptions = [['', blankLabel]].concat(VALID_PRIORITY_OVERRIDES_LIST.map(function (o) { return [o, o]; }))
+      .map(function (pair) { return '<option value="' + pair[0] + '"' + (sessionOverride === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>'; }).join('');
+    // v1.4.4 -- an optimistic local overlay (state.localIncludeOverrides)
+    // wins over the last-loaded server value, exactly like
+    // localAfWritten/localAfExcused do elsewhere, so the checkbox flips
+    // instantly instead of waiting for a full loadPlannerData() round trip.
+    var included = (m.code in state.localIncludeOverrides) ? state.localIncludeOverrides[m.code] : m.includeInStudyPlan;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #F3E3D2;flex-wrap:wrap;">' +
+      '<div class="ep-clickable" onclick="' + h_('quickToggleStudyInclude_', [m.code, included]) + '" style="' + (included ? CHECK_ON : CHECK_OFF) + '"></div>' +
+      '<div style="width:9px;height:9px;border-radius:3px;background:' + m.color + ';flex-shrink:0;"></div>' +
+      '<div style="flex:1;min-width:120px;font-size:13px;font-weight:600;">' + esc(m.short) + '</div>' +
+      '<select onchange="' + hv_('setStudyGenPriorityOverride_', [m.code]) + '" style="padding:6px 8px;border-radius:8px;border:1px solid #E7C7A9;background:#fff;font-size:12px;font-family:\'Inter\',sans-serif;">' + priorityOptions + '</select>' +
+      '</div>';
+  }).join('');
+  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;overflow:hidden;margin-bottom:16px;">' + rows +
+    '<div style="padding:8px 14px;font-size:11px;color:#8A7A68;">Priority chosen here applies only to your next "Generate plan" click — nothing is saved, set it fresh each time.</div></div>';
+}
 function screenStudy_(vm) {
   var cards = vm.studySessions.length ? vm.studySessions.map(studySessionCardHtml_).join('')
     : '<div style="font-size:13px;color:#8A7A68;">No study sessions planned yet. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('openStudySessionForm_', [null]) + '">Add one.</span></div>';
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Study Planner</div>' +
     '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Preview · Learn · Practice · Mistake · Recall · Formula · Visualization · Programming · Synthesis · Exam · Weekly Review</div>' +
+    '<div class="ep-clickable" onclick="' + h_('toggleStudyIncludeChecklist_', []) + '" style="font-size:12.5px;font-weight:700;color:#B24B2E;cursor:pointer;margin-bottom:8px;">' + (state.studyIncludeChecklistOpen ? '▾' : '▸') + ' Which modules? (include, priority)</div>' +
+    (state.studyIncludeChecklistOpen ? studyIncludeChecklistHtml_(vm) : '') +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">' +
     '<div class="ep-clickable" onclick="' + h_('openStudySessionForm_', [null]) + '" style="background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Add study session</div>' +
     '<div class="ep-clickable" onclick="' + h_('openIndependentStudyForm_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Log independent study</div>' +
-    '<div class="ep-clickable" onclick="' + h_('doGenerateSuggestions_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">' + (vm.suggestionsLoading ? 'Generating…' : 'Generate this week’s plan') + '</div>' +
+    '<select onchange="' + hv_('setSuggestionsWeekOffset_', []) + '" style="padding:10px 12px;border-radius:10px;border:1px solid #F0DCC8;background:#FDF6F0;font-weight:700;font-size:13.5px;font-family:\'Inter\',sans-serif;">' +
+    [0, 1, 2, 3].map(function (n) {
+      var label = n === 0 ? 'This week' : n === 1 ? 'Next week' : n + ' weeks ahead';
+      return '<option value="' + n + '"' + (vm.suggestionsWeekOffset === n ? ' selected' : '') + '>' + label + '</option>';
+    }).join('') +
+    '</select>' +
+    '<div class="ep-clickable" onclick="' + h_('doGenerateSuggestions_', []) + '" style="background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">' + (vm.suggestionsLoading ? 'Generating…' : 'Generate plan') + '</div>' +
     '</div>' +
     (vm.studySessionFormOpen ? studySessionFormHtml_(vm) : '') +
     (vm.independentStudyFormOpen ? independentStudyFormHtml_(vm) : '') +
@@ -2642,7 +2879,10 @@ function revisionRowHtml_(r) {
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
     '<div style="display:flex;align-items:center;gap:8px;"><div style="width:10px;height:10px;border-radius:3px;background:' + r.color + ';"></div><div style="font-weight:800;font-size:15px;">' + esc(r.moduleShort) + ' — ' + esc(r.topic) + '</div>' +
     (r.weakTopic ? '<span style="font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;background:#F7E2D8;color:#8F3B23;">Weak topic</span>' : '') + '</div>' +
+    '<div style="display:flex;gap:12px;align-items:center;flex-shrink:0;">' +
     '<div class="ep-clickable" onclick="' + h_('toggleRevisionEditUi_', [r.key]) + '" style="font-size:11px;font-weight:700;color:#B24B2E;cursor:pointer;">' + (r.isEditing ? 'Close' : 'Edit') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('deleteRevisionTopicUi_', [r.module, r.topic]) + '" style="font-size:11px;font-weight:700;color:#8F3B23;cursor:pointer;">Delete</div>' +
+    '</div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;">' +
     '<div><div style="font-size:10px;color:#8A7A68;font-weight:700;">CONFIDENCE</div><div style="background:#F3E3D2;border-radius:20px;height:7px;overflow:hidden;margin:4px 0;"><div style="background:' + r.color + ';height:7px;width:' + r.confidence + '%;"></div></div><div style="font-size:11px;font-weight:700;">' + r.confidence + '%</div></div>' +
@@ -2679,7 +2919,8 @@ function moduleConfigFormHtml_(m) {
     colour: m.color, difficulty: m.difficulty || '', workload: m.workload || '', targetMark: m.targetMark || '',
     minWeeklyHours: m.minWeeklyHours || '', repeated: m.repeated, attendanceSensitive: m.attendanceSensitive,
     compulsoryPractical: m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
-    lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || ''
+    lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
+    includeInStudyPlan: m.includeInStudyPlan !== false
   };
   return '<div style="background:#F9EFE3;border-radius:12px;padding:14px;margin-top:12px;display:flex;flex-direction:column;gap:8px;">' +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;">MODULE CONFIGURATION</div>' +
@@ -2697,6 +2938,11 @@ function moduleConfigFormHtml_(m) {
     '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'attendanceSensitive']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.attendanceSensitive ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Attendance-sensitive lecture</span></div>' +
     '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'compulsoryPractical']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.compulsoryPractical ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Compulsory practical/lab</span></div>' +
     '</div>' +
+    '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">STUDY PLANNER</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+    '<div class="ep-clickable" onclick="' + h_('toggleModuleConfigBool_', [m.code, 'includeInStudyPlan']) + '" style="display:flex;align-items:center;gap:8px;cursor:pointer;"><div style="' + (f.includeInStudyPlan ? CHECK_ON : CHECK_OFF) + '"></div><span style="font-size:12.5px;">Include in study plan</span></div>' +
+    '</div>' +
+    (m.ruleStatus !== 'Verified' ? '<div style="font-size:11px;color:#8A7A68;">This module has no verified AF/A1/A2/A3 framework, so it won\'t get a computed priority -- set one on the day, in Study Planner\'s "Which modules?" checklist, before generating.</div>' : '') +
     '<div style="font-size:10.5px;font-weight:700;color:#B24B2E;margin-top:6px;">CONTACTS</div>' +
     '<div style="display:flex;gap:8px;">' +
     '<input value="' + escAttr(f.coordinatorName) + '" oninput="' + hv_('setModuleConfigField_', [m.code, 'coordinatorName']) + '" placeholder="Coordinator name" style="flex:1;padding:9px;border-radius:8px;border:1px solid #E7C7A9;font-size:13px;font-family:\'Inter\',sans-serif;">' +
@@ -3003,6 +3249,25 @@ function publishedFinalInputHtml_(mi) {
     (typeof mi.publishedFinalBeforeA3 === 'number' ? '<div class="ep-clickable" onclick="' + h_('savePublishedFinal_', [mi.name, code, true]) + '" style="background:#F3E3D2;color:#3B332B;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">Clear</div>' : '') +
     '</div></div>';
 }
+// v1.4.0 -- mirror of publishedFinalInputHtml_ for the after-A3 case: a
+// module that publishes a new combined final percentage after A3 instead of
+// a raw A3 mark. See api_setPublishedFinalAfterA3 / mi_computeMarksIntelligence_
+// for how this feeds the Official Final Mark (the higher of the computed
+// value and this one wins, so it can only raise the mark).
+function publishedFinalAfterInputHtml_(mi) {
+  var code = mi.code;
+  var typed = state.publishedFinalAfterInput[code];
+  var val = (typed !== undefined) ? typed : (typeof mi.publishedFinalAfterA3 === 'number' ? mi.publishedFinalAfterA3 : '');
+  var saving = !!state.publishedFinalAfterSaving[code];
+  return '<div style="background:#F7EFE2;border:1px solid #E7C7A9;border-radius:12px;padding:12px 14px;margin-top:10px;">' +
+    '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.5px;color:#8A7A68;margin-bottom:4px;">PUBLISHED FINAL (AFTER A3)</div>' +
+    '<div style="font-size:11.5px;color:#8A7A68;margin-bottom:6px;">For a module that publishes a new combined final percentage after A3, instead of a raw A3 mark. Used as an alternative to the calculated Official Final Mark below — whichever is higher wins, so this can only raise your result, never lower it.</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+    '<input type="number" min="0" max="100" step="0.1" placeholder="e.g. 58.0" value="' + escAttr(val) + '" oninput="' + hv_('setPublishedFinalAfterInput_', [code]) + '" style="width:130px;padding:7px 10px;border-radius:8px;border:1px solid #E7C7A9;font-size:12.5px;font-family:\'Inter\',sans-serif;">' +
+    '<div class="ep-clickable" onclick="' + h_('savePublishedFinalAfter_', [mi.name, code]) + '" style="background:#DD7A56;color:#fff;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">' + (saving ? 'Saving…' : 'Save') + '</div>' +
+    (typeof mi.publishedFinalAfterA3 === 'number' ? '<div class="ep-clickable" onclick="' + h_('savePublishedFinalAfter_', [mi.name, code, true]) + '" style="background:#F3E3D2;color:#3B332B;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;cursor:pointer;">Clear</div>' : '') +
+    '</div></div>';
+}
 
 // v1.3.1 2nd correction pass: replaces facultyRoutesHtml_/fmRouteLineHtml_.
 // Displays the full ordered pipeline result: MTD, FM1/FM2/FM3, Raw FMp
@@ -3131,6 +3396,7 @@ function marksIntelligenceCardHtml_(mi) {
     (mi.riskAnalysis ? reasonsListHtml_(mi.riskAnalysis.reasons) : '') +
     a2InferencePanelHtml_(mi.inferredA2) +
     publishedFinalInputHtml_(mi) +
+    publishedFinalAfterInputHtml_(mi) +
     (expanded ? (assessmentStatusTableHtml_(mi) + pipelineHtml_(mi, mi, mi.mtd) + a3RecoveryCalculatorHtml_(mi) + whatIfSimulatorHtml_(mi)) :
       '<div style="font-size:11.5px;color:#B24B2E;font-weight:700;margin-top:8px;cursor:pointer;" class="ep-clickable" onclick="' + h_('toggleMarksIntelligenceExpanded_', [mi.code]) + '">Show assessment status, calculation pipeline, A3 Recovery Calculator &amp; What-If Simulator ▾</div>') +
     '</div>';
@@ -3325,11 +3591,50 @@ function resourceRowHtml_(vm, r) {
     '</div></div>';
 }
 
+// v1.4.0 -- uploads a real file to Google Drive (Semester name from
+// Settings > Module > category), then writes a normal Resources row
+// pointing at it. Kept entirely separate from resourceFormHtml_ above,
+// which stays the existing text-reference-only flow untouched. The file
+// input has no value binding (native, browser-managed) and no onchange
+// handler that would trigger render() -- see saveDriveUpload_ for why:
+// this app's render() rebuilds the whole page's innerHTML, which would
+// destroy the input and lose the chosen file before Save is even clicked.
+function driveUploadFormHtml_(vm) {
+  var f = vm.driveUploadForm || {};
+  var moduleOptions = '<option value="">Module…</option>' + vm.modules.map(function (m) {
+    return '<option value="' + escAttr(m.name) + '"' + (f.module === m.name ? ' selected' : '') + '>' + esc(m.name) + '</option>';
+  }).join('');
+  var categoryOptions = VALID_DRIVE_CATEGORIES_LIST.map(function (c) {
+    return '<option value="' + c + '"' + (f.category === c ? ' selected' : '') + '>' + c + '</option>';
+  }).join('');
+  var prioOptions = ['Low', 'Medium', 'High'].map(function (p) { return '<option value="' + p + '"' + (f.priority === p ? ' selected' : '') + '>' + p + ' priority</option>'; }).join('');
+  return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:16px;padding:20px;margin-bottom:20px;max-width:480px;">' +
+    '<div style="font-size:11px;font-weight:700;letter-spacing:1px;color:#B24B2E;margin-bottom:12px;">UPLOAD FILE TO DRIVE</div>' +
+    '<div style="font-size:11.5px;color:#8A7A68;margin-bottom:10px;">Goes into "&lt;Semester name&gt;/&lt;Module&gt;/&lt;category&gt;" in your Google Drive (created automatically), and shows up below like any other resource.</div>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;">' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['module']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + moduleOptions + '</select>' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['category']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + categoryOptions + '</select>' +
+    '<input value="' + escAttr(f.title) + '" oninput="' + hv_('setDriveUploadField_', ['title']) + '" placeholder="Resource name (e.g. Tutorial 4)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;">' +
+    '<input value="' + escAttr(f.topic) + '" oninput="' + hv_('setDriveUploadField_', ['topic']) + '" placeholder="Topic or chapter (optional)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;">' +
+    '<input id="drive-upload-file-input" type="file" style="font-size:13px;">' +
+    '<select onchange="' + hv_('setDriveUploadField_', ['priority']) + '" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;background:#fff;font-size:14px;font-family:\'Inter\',sans-serif;">' + prioOptions + '</select>' +
+    '<textarea oninput="' + hv_('setDriveUploadField_', ['notes']) + '" placeholder="Notes (optional)" style="padding:11px;border-radius:10px;border:1px solid #E7C7A9;font-size:14px;font-family:\'Inter\',sans-serif;min-height:56px;resize:vertical;">' + esc(f.notes) + '</textarea>' +
+    (f.error ? '<div style="font-size:12px;color:#8F3B23;background:#F7E2D8;border-radius:8px;padding:8px 10px;">' + esc(f.error) + '</div>' : '') +
+    '<div style="display:flex;gap:8px;">' +
+    '<div class="ep-clickable" onclick="' + h_('saveDriveUpload_', []) + '" style="flex:1;text-align:center;background:#DD7A56;color:#fff;font-weight:700;font-size:14px;padding:11px;border-radius:10px;cursor:pointer;">' + (vm.driveUploadSaving ? 'Uploading…' : 'Upload') + '</div>' +
+    '<div class="ep-clickable" onclick="' + h_('closeDriveUploadForm_', []) + '" style="flex:1;text-align:center;background:#F3E3D2;color:#3B332B;font-weight:600;font-size:14px;padding:11px;border-radius:10px;cursor:pointer;">Cancel</div>' +
+    '</div></div></div>';
+}
+
 function screenResources_(vm) {
   var rows = vm.resources.length ? vm.resources.map(function (r) { return resourceRowHtml_(vm, r); }).join('') : '<div style="font-size:13px;color:#8A7A68;">No resources logged yet. <span class="ep-clickable" style="color:#B24B2E;font-weight:700;cursor:pointer;" onclick="' + h_('openResourceForm_', [null]) + '">Add one.</span></div>';
   return '<div><div style="font-family:\'Caveat\',cursive;font-weight:700;font-size:44px;">Resources</div>' +
-    '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Named study materials only — lectures, tutorials, past papers, formula bible chapters. No files are stored here.</div>' +
-    '<div class="ep-clickable" onclick="' + h_('openResourceForm_', [null]) + '" style="display:inline-block;background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;margin-bottom:20px;">+ Add resource</div>' +
+    '<div style="font-size:14px;color:#8A7A68;margin-bottom:16px;">Named study materials — lectures, tutorials, past papers, formula bible chapters — as a text reference, or upload an actual file to Google Drive below.</div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">' +
+    '<div class="ep-clickable" onclick="' + h_('openResourceForm_', [null]) + '" style="display:inline-block;background:#DD7A56;color:#fff;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Add resource</div>' +
+    '<div class="ep-clickable" onclick="' + h_('openDriveUploadForm_', []) + '" style="display:inline-block;background:#FDF6F0;border:1px solid #F0DCC8;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;">+ Upload file to Drive</div>' +
+    '</div>' +
+    (vm.driveUploadFormOpen ? driveUploadFormHtml_(vm) : '') +
     (vm.resourceFormOpen ? resourceFormHtml_(vm) : '') +
     '<div style="display:flex;flex-direction:column;gap:10px;">' + rows + '</div></div>';
 }
@@ -3572,8 +3877,10 @@ function closeStudySessionForm_() {
   render();
 }
 function setStudySessionField_(field, value) {
+  // no render(): a full render() on every keystroke rebuilds the whole
+  // page's innerHTML, which destroys and recreates this input and drops
+  // focus after one character. Matches setInboxField_/setMarkField_.
   state.studySessionForm = Object.assign({}, state.studySessionForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function toggleStudySessionSync_() {
   var f = state.studySessionForm;
@@ -3583,8 +3890,8 @@ function toggleStudySessionSync_() {
 function saveStudySession_() {
   var f = state.studySessionForm;
   if (f.saving) return;
-  if (!f.module) { setStudySessionField_('error', 'Choose a module.'); return; }
-  if (!f.date) { setStudySessionField_('error', 'Choose a date.'); return; }
+  if (!f.module) { setStudySessionField_('error', 'Choose a module.'); render(); return; }
+  if (!f.date) { setStudySessionField_('error', 'Choose a date.'); render(); return; }
   state.studySessionForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   var editingId = state.studySessionEditingId;
@@ -3619,15 +3926,15 @@ function closeIndependentStudyForm_() {
   render();
 }
 function setIndependentField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.independentStudyForm = Object.assign({}, state.independentStudyForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function saveIndependentStudy_() {
   var f = state.independentStudyForm;
   if (f.saving) return;
-  if (!f.module) { setIndependentField_('error', 'Choose a module.'); return; }
-  if (!(f.topic || '').trim()) { setIndependentField_('error', 'Give this a topic.'); return; }
-  if (!f.duration) { setIndependentField_('error', 'Enter how many minutes.'); return; }
+  if (!f.module) { setIndependentField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.topic || '').trim()) { setIndependentField_('error', 'Give this a topic.'); render(); return; }
+  if (!f.duration) { setIndependentField_('error', 'Enter how many minutes.'); render(); return; }
   state.independentStudyForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   runScript_('api_logIndependentStudy', [f]).then(function (res) {
@@ -3644,9 +3951,23 @@ function saveIndependentStudy_() {
 }
 
 // ---- Study Planner: weekly suggestions preview/accept ----
+function setSuggestionsWeekOffset_(value) {
+  state.suggestionsWeekOffset = parseInt(value, 10) || 0;
+  render();
+}
 function doGenerateSuggestions_() {
   state.suggestionsLoading = true; render();
-  runScript_('api_generateStudySuggestions', [null]).then(function (res) {
+  // api_generateStudySuggestions already accepts a week-anchor date and
+  // resolves it to that week's Monday server-side -- any date inside the
+  // target week works, so "today + N*7 days" is enough for the "up to 3
+  // weeks ahead" selector above.
+  var offsetDays = (state.suggestionsWeekOffset || 0) * 7;
+  var anchor = new Date();
+  anchor.setDate(anchor.getDate() + offsetDays);
+  var anchorIso = anchor.getFullYear() + '-' + String(anchor.getMonth() + 1).padStart(2, '0') + '-' + String(anchor.getDate()).padStart(2, '0');
+  // v1.4.3 -- session-only priority picks from the "Which modules?"
+  // checklist, sent for this one call only -- see setStudyGenPriorityOverride_.
+  runScript_('api_generateStudySuggestions', [anchorIso, state.studyGenPriorityOverrides]).then(function (res) {
     state.suggestionsLoading = false;
     if (!res.ok) { showToast_('error', 'Could not generate suggestions: ' + res.error); render(); return; }
     state.suggestionsPreview = res.data;
@@ -3655,10 +3976,10 @@ function doGenerateSuggestions_() {
 }
 function closeSuggestions_() { state.suggestionsPreview = null; render(); }
 function setSuggestionField_(i, field, value) {
+  // no render(): free typing (topic), matches setStudySessionField_.
   var p = state.suggestionsPreview;
   if (!p) return;
   p.suggestions[i] = Object.assign({}, p.suggestions[i], (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function rejectOneSuggestion_(i) {
   var p = state.suggestionsPreview;
@@ -3692,8 +4013,8 @@ function toggleCompleteSessionUi_(sessionId) {
   render();
 }
 function setCompleteField_(field, value) {
+  // no render(): free typing (actual minutes / confidence % / note), matches setStudySessionField_.
   state.completeSessionForm = Object.assign({}, state.completeSessionForm, (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function closeCompleteSession_() { state.completingSessionId = null; state.completeSessionForm = null; render(); }
 function saveCompleteSession_(sessionId) {
@@ -3742,15 +4063,15 @@ function openRevisionAddForm_() {
 }
 function closeRevisionAddForm_() { state.revisionFormOpen = false; state.revisionForm = null; render(); }
 function setRevisionAddField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.revisionForm = Object.assign({}, state.revisionForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
-  render();
 }
 function saveRevisionTopic_() {
   var f = state.revisionForm;
-  if (!f.module) { setRevisionAddField_('error', 'Choose a module.'); return; }
-  if (!(f.topic || '').trim()) { setRevisionAddField_('error', 'Give this a topic name.'); return; }
+  if (!f.module) { setRevisionAddField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.topic || '').trim()) { setRevisionAddField_('error', 'Give this a topic name.'); render(); return; }
   runScript_('api_addRevisionTopic', [f]).then(function (res) {
-    if (!res.ok) { setRevisionAddField_('error', res.error); return; }
+    if (!res.ok) { setRevisionAddField_('error', res.error); render(); return; }
     showToast_('success', 'Revision topic added.');
     closeRevisionAddForm_();
     loadPlannerData();
@@ -3769,8 +4090,8 @@ function toggleRevisionEditUi_(key) {
 }
 function closeRevisionEditUi_() { state.revisionEditKey = null; state.revisionEditForm = null; render(); }
 function setRevisionEditField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   state.revisionEditForm = Object.assign({}, state.revisionEditForm, (function () { var o = {}; o[field] = value; return o; })());
-  render();
 }
 function toggleRevisionWeakUi_() {
   var f = state.revisionEditForm;
@@ -3787,6 +4108,50 @@ function saveRevisionEdit_(module, topic) {
   });
 }
 
+// v1.4.5 -- Revision Tracker had no delete path at all before this (manual
+// or auto-created topic alike). Uses the existing in-app confirm modal,
+// same stable-ID-free (Module, Topic) matching api_updateRevisionTopic
+// already uses -- this sheet has no ID column.
+function deleteRevisionTopicUi_(module, topic) {
+  openConfirmModal('Delete this revision topic?',
+    'Delete "' + topic + '" (' + module + ') from Revision Tracker? This cannot be undone. It does not delete any Study Planner session that contributed to it.',
+    'doDeleteRevisionTopic_', [module, topic]);
+}
+function doDeleteRevisionTopic_(module, topic) {
+  runScript_('api_deleteRevisionTopic', [module, topic]).then(function (res) {
+    if (!res.ok) { showToast_('error', 'Could not delete: ' + res.error); return; }
+    showToast_('success', 'Revision topic deleted.');
+    loadPlannerData();
+  });
+}
+
+// ---- Study Planner: "Which modules?" quick checklist ----
+function toggleStudyIncludeChecklist_() { state.studyIncludeChecklistOpen = !state.studyIncludeChecklistOpen; render(); }
+// v1.4.4 -- optimistic: flips instantly (matches toggleAfWritten's pattern)
+// instead of waiting for a full loadPlannerData() reload before the
+// checkbox visually updates. Reverts the local overlay only if the save
+// itself fails, so a rapid second click always reads the just-flipped
+// value, not a stale pre-click one.
+function quickToggleStudyInclude_(code, currentValue) {
+  var newValue = !currentValue;
+  state.localIncludeOverrides[code] = newValue;
+  render();
+  runScript_('api_saveModuleAcademicConfig', [code, { includeInStudyPlan: newValue }]).then(function (res) {
+    if (!res.ok) {
+      showToast_('error', 'Could not save: ' + res.error);
+      delete state.localIncludeOverrides[code];
+      render();
+    }
+  });
+}
+// v1.4.3 -- session-only, never sent to the backend until Generate is
+// clicked (doGenerateSuggestions_) -- see studyIncludeChecklistHtml_.
+function setStudyGenPriorityOverride_(code, value) {
+  if (value) state.studyGenPriorityOverrides[code] = value;
+  else delete state.studyGenPriorityOverrides[code];
+  render();
+}
+
 // ---- Module configuration + contacts ----
 function toggleModuleConfigUi_(code) {
   var nowOpen = !state.moduleConfigFormOpenByCode[code];
@@ -3796,7 +4161,8 @@ function toggleModuleConfigUi_(code) {
       colour: m.color || '#8B8B87', difficulty: m.difficulty || '', workload: m.workload || '', targetMark: m.targetMark || '',
       minWeeklyHours: m.minWeeklyHours || '', repeated: !!m.repeated, attendanceSensitive: !!m.attendanceSensitive,
       compulsoryPractical: !!m.compulsoryPractical, coordinatorName: m.coordinatorName || '', coordinatorEmail: m.coordinatorEmail || '',
-      lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || ''
+      lecturerName: m.lecturerName || '', lecturerEmail: m.lecturerEmail || '', contactNotes: m.contactNotes || '',
+      includeInStudyPlan: m.includeInStudyPlan !== false
     };
   }
   state.moduleConfigFormOpenByCode[code] = nowOpen;
@@ -3804,10 +4170,10 @@ function toggleModuleConfigUi_(code) {
 }
 function closeModuleConfigUi_(code) { state.moduleConfigFormOpenByCode[code] = false; render(); }
 function setModuleConfigField_(code, field, value) {
+  // no render(): free typing, matches setStudySessionField_.
   var f = state.moduleConfigForms[code] || {};
   var o = {}; o[field] = value;
   state.moduleConfigForms[code] = Object.assign({}, f, o);
-  render();
 }
 function toggleModuleConfigBool_(code, field) {
   var f = state.moduleConfigForms[code] || {};
@@ -3828,6 +4194,7 @@ function saveModuleConfigUi_(code) {
 
 // ---- Resources: add/edit/delete + type-specific progress ----
 function openResourceForm_(resourceId) {
+  state.driveUploadFormOpen = false;
   if (resourceId) {
     var r = findRaw_('resources', 'resourceId', resourceId);
     if (!r) { showToast_('error', 'Could not find that resource.'); return; }
@@ -3844,15 +4211,72 @@ function openResourceForm_(resourceId) {
   render();
 }
 function closeResourceForm_() { state.resourceFormOpen = false; state.resourceForm = null; state.resourceEditingId = null; render(); }
-function setResourceField_(field, value) {
-  state.resourceForm = Object.assign({}, state.resourceForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
+
+// v1.4.0 -- Drive upload form. See driveUploadFormHtml_ for why the file
+// input itself has no state/onchange wiring.
+var MAX_DRIVE_UPLOAD_BYTES_CLIENT_ = 20 * 1024 * 1024; // matches MAX_UPLOAD_BYTES in Drive_Resources_v1.4.0.js
+function openDriveUploadForm_() {
+  state.resourceFormOpen = false;
+  state.driveUploadForm = { module: '', category: VALID_DRIVE_CATEGORIES_LIST[0], title: '', topic: '', priority: 'Medium', notes: '', error: '', saving: false };
+  state.driveUploadFormOpen = true;
   render();
+}
+function closeDriveUploadForm_() { state.driveUploadFormOpen = false; state.driveUploadForm = null; render(); }
+function setDriveUploadField_(field, value) {
+  // no render(): free typing, matches setResourceField_. Also intentionally
+  // never touched by the file input itself (no onchange here) -- a render()
+  // between choosing a file and clicking Upload would rebuild the <input>
+  // and lose the selection, since a browser file input's chosen file can't
+  // be restored programmatically after its DOM node is replaced.
+  state.driveUploadForm = Object.assign({}, state.driveUploadForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
+}
+function saveDriveUpload_() {
+  var f = state.driveUploadForm;
+  if (!f || state.driveUploadSaving) return;
+  if (!f.module) { setDriveUploadField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.title || '').trim()) { setDriveUploadField_('error', 'Give this resource a name.'); render(); return; }
+  var fileInput = document.getElementById('drive-upload-file-input');
+  var file = fileInput && fileInput.files && fileInput.files[0];
+  if (!file) { setDriveUploadField_('error', 'Choose a file to upload.'); render(); return; }
+  if (file.size > MAX_DRIVE_UPLOAD_BYTES_CLIENT_) {
+    setDriveUploadField_('error', 'File is too large (' + Math.round(file.size / 1024 / 1024) + 'MB). Keep uploads under ' + Math.round(MAX_DRIVE_UPLOAD_BYTES_CLIENT_ / 1024 / 1024) + 'MB.');
+    render();
+    return;
+  }
+  state.driveUploadSaving = true; render();
+  var reader = new FileReader();
+  reader.onerror = function () {
+    state.driveUploadSaving = false;
+    showToast_('error', 'Could not read the file — try choosing it again.');
+    render();
+  };
+  reader.onload = function () {
+    // reader.result is "data:<mime>;base64,<data>" -- strip the prefix, the
+    // backend only wants the base64 payload itself.
+    var base64 = String(reader.result).split(',')[1] || '';
+    runScript_('api_uploadResourceFile', [{
+      module: f.module, category: f.category, title: f.title, topic: f.topic, priority: f.priority, notes: f.notes,
+      fileName: file.name, mimeType: file.type, base64Data: base64
+    }]).then(function (res) {
+      state.driveUploadSaving = false;
+      if (!res.ok) { setDriveUploadField_('error', res.error); render(); return; }
+      showToast_('success', 'Uploaded to Drive and added to Resources.');
+      closeDriveUploadForm_();
+      loadPlannerData();
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
+function setResourceField_(field, value) {
+  // no render(): free typing, matches setStudySessionField_.
+  state.resourceForm = Object.assign({}, state.resourceForm, (function () { var o = {}; o[field] = value; o.error = ''; return o; })());
 }
 function saveResource_() {
   var f = state.resourceForm;
   if (f.saving) return;
-  if (!f.module) { setResourceField_('error', 'Choose a module.'); return; }
-  if (!(f.title || '').trim()) { setResourceField_('error', 'Give this resource a name.'); return; }
+  if (!f.module) { setResourceField_('error', 'Choose a module.'); render(); return; }
+  if (!(f.title || '').trim()) { setResourceField_('error', 'Give this resource a name.'); render(); return; }
   state.resourceForm = Object.assign({}, f, { saving: true, error: '' });
   render();
   var editingId = state.resourceEditingId;
@@ -4022,8 +4446,7 @@ function toggleMarksIntelligenceExpanded_(code) {
   render();
 }
 function setA3CustomTargetInput_(code, value) {
-  state.a3CustomTargetInput[code] = value;
-  render();
+  state.a3CustomTargetInput[code] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function computeCustomA3Recovery_(moduleName, code) {
   var raw = state.a3CustomTargetInput[code];
@@ -4055,8 +4478,34 @@ function computeCustomA3Recovery_(moduleName, code) {
 // existing custom-target A3 Recovery lookup.
 // ------------------------------------------------------------------
 function setPublishedFinalInput_(code, value) {
-  state.publishedFinalInput[code] = value;
+  state.publishedFinalInput[code] = value; // no render(): free typing (input keeps its own DOM value; state is only read on Save)
+}
+// v1.4.0 -- mirror of setPublishedFinalInput_/savePublishedFinal_ for the
+// after-A3 field.
+function setPublishedFinalAfterInput_(code, value) {
+  state.publishedFinalAfterInput[code] = value; // no render(): free typing
+}
+function savePublishedFinalAfter_(moduleName, code, clear) {
+  var value;
+  if (clear) {
+    value = '';
+  } else {
+    var raw = state.publishedFinalAfterInput[code];
+    if (raw === undefined) { return; } // nothing typed -- Save is a no-op until the field is touched
+    var n = parseFloat(raw);
+    if (raw === '') { value = ''; }
+    else if (isNaN(n) || n < 0 || n > 100) { showToast_('error', 'Enter a Published Final between 0 and 100, or leave it blank to clear.'); return; }
+    else { value = n; }
+  }
+  state.publishedFinalAfterSaving[code] = true;
   render();
+  runScript_('api_setPublishedFinalAfterA3', [moduleName, value]).then(function (res) {
+    state.publishedFinalAfterSaving[code] = false;
+    if (!res.ok) { showToast_('error', 'Could not save Published Final: ' + res.error); render(); return; }
+    delete state.publishedFinalAfterInput[code];
+    showToast_('success', clear ? 'Published Final (After A3) cleared for ' + moduleName + '.' : 'Published Final (After A3) saved for ' + moduleName + '.');
+    loadPlannerData();
+  });
 }
 function savePublishedFinal_(moduleName, code, clear) {
   var value;
@@ -4111,8 +4560,7 @@ function saveAssessmentStatus_(moduleName, code, key) {
 }
 
 function setDcaMarkInput_(code, value) {
-  state.dcaMarkInput[code] = value;
-  render();
+  state.dcaMarkInput[code] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function saveDcaMark_(moduleName, code, clear) {
   var value;
@@ -4143,8 +4591,7 @@ function toggleWhatIfOpen_(code) {
 }
 function setWhatIfInput_(code, key, value) {
   state.whatIfInput[code] = state.whatIfInput[code] || {};
-  state.whatIfInput[code][key] = value;
-  render();
+  state.whatIfInput[code][key] = value; // no render(): free typing (matches setPublishedFinalInput_)
 }
 function runWhatIfSimulation_(moduleName, code) {
   var typed = state.whatIfInput[code] || {};
@@ -4546,7 +4993,7 @@ function loadSemesterDashboard_() {
     render();
   });
 }
-function setSemReflectionField_(key, value) { state.semReflection[key] = value; render(); }
+function setSemReflectionField_(key, value) { state.semReflection[key] = value; } // no render(): free typing
 
 // ---- Report (spec §2/§3) ----
 function runSemGenerateReport_() {

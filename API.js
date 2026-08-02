@@ -157,6 +157,14 @@ function runRecoveryDiagnostics_() {
 // master introduced the bridge. doPost has been removed outright: it had no
 // other production purpose.
 function doGet(e) {
+  // v1.4.0 -- Reminders feed (see Reminders_Feed_v1.4.0.js): a request
+  // carrying feed/markSynced query params is a Shortcut/automation call,
+  // never a browser loading the app -- handled entirely separately, always
+  // returns JSON, and never falls through to serving the app page below.
+  var params = (e && e.parameter) || {};
+  if (params.feed === "assignments" || params.markSynced) {
+    return remindersFeedRequest_(params);
+  }
   return HtmlService.createHtmlOutputFromFile("Index")
     .setTitle("Engineering Planner OS")
     .addMetaTag("viewport", "width=device-width, initial-scale=1")
@@ -376,6 +384,10 @@ function api_getPlannerData() {
         distinctionMark: rule ? num_(rule["Distinction mark"]) : 75,
         rulesVerified: !!(rule && rule["Rule status"] === "Verified"),
         afMethod: rule ? rule["AF calculation method"] : "UNKNOWN",
+        // v1.4.1 -- "Tutorial tests" / "Practicals" / "" (not yet chosen).
+        // The "+ Add Assessment" form's Item type choice locks to whichever
+        // is set here -- see AF_Components_v1.4.1_Migration.gs.
+        afItemType: rule ? (rule["AF item type"] || "") : "",
         generalNotes: rule ? rule["General notes"] : "No assessment framework supplied for this module yet.",
         // v1.3.1 -- Faculty Override Rule 2 exception + DCA enabled toggles.
         // Both default to false (Rule 2 ACTIVE, DCA OFF) for a module that
@@ -405,6 +417,17 @@ function api_getPlannerData() {
         coordinatorEmail: m["Coordinator email"] || "",
         lecturerName: m["Lecturer name"] || "",
         lecturerEmail: m["Lecturer email"] || "",
+        // v1.4.2 -- Study Planner-specific include switch (independent of
+        // "Active status", which drives everything else). A blank cell
+        // (module added before/without the migration having set it) is
+        // treated as TRUE, never silently excluded -- only an explicit
+        // FALSE excludes.
+        includeInStudyPlan: m["Include in study plan (TRUE/FALSE)"] !== false,
+        // v1.4.2's persistent "Manual priority override" read is retired as
+        // of v1.4.3 (see ai_computePriority_) -- the column may still exist
+        // on a workbook that ran that migration, but nothing reads it
+        // anymore; priority for a module with no verified framework is now
+        // entered fresh per generation instead (api_generateStudySuggestions).
         contactNotes: m["Contact notes"] || ""
       };
     });
@@ -438,6 +461,13 @@ function api_getPlannerData() {
         // Marks_Intelligence_v1.3.1_Migration.gs has run and a value has
         // been entered.
         publishedFinalBeforeA3: r["Published Final (Before A3)"],
+        // v1.4.0 -- mirror of the field above for the AFTER-A3 case: a
+        // module that does not publish a raw A3 mark, only a new combined
+        // final percentage once A3 is marked. Read by
+        // mi_computeMarksIntelligence_ only (never by the Hidden A2
+        // inference engine, which is a before-A3 concern) -- see there for
+        // how it's folded into the Official Final Mark.
+        publishedFinalAfterA3: r["Published Final (After A3)"],
         // v1.3.1 (2nd pass) -- explicit, independent written/not-written/
         // excused/deferred status per assessment. A BLANK MARK MUST NOT BE
         // ASSUMED "not written" (spec correction) -- this is why a separate
@@ -462,7 +492,9 @@ function api_getPlannerData() {
         mark: num_(r["Mark"]), max: num_(r["Maximum mark"]), pct: num_(r["Percentage"]),
         date: isoDate_(r["Date"]),
         written: r["Written"] === true, excused: r["Excused or excluded"] === true,
-        included: r["Included in AF"] === true, notes: r["Notes"]
+        included: r["Included in AF"] === true, notes: r["Notes"],
+        // v1.4.1 -- blank until AF_Components_v1.4.1_Migration.gs has run.
+        itemType: r["Item type"] || "", weight: num_(r["Weight"])
       };
     });
 
@@ -473,14 +505,16 @@ function api_getPlannerData() {
       // not a new column) so the frontend can show "Filed as Assignment/Assessment"
       // accurately even after a full page reload, without guessing.
       var processedInto = r["Processed into (sheet!row)"] || "";
-      var filedType = "";
-      if (processedInto.indexOf(ASSIGNMENTS_SHEET) === 0) filedType = "Assignment";
-      else if (processedInto.indexOf(ASSESSMENTS_SHEET) === 0) filedType = "Assessment";
+      // v1.4.0 -- now goes through the same resolveFiledRecord_ helper
+      // processOneInboxItemById_ uses, so filedId (the filed record's own
+      // stable Assignment/Assessment ID) comes along too -- needed for the
+      // Inbox "delete this AND its filed record" option.
+      var resolvedFiled = resolveFiledRecord_(processedInto);
       return {
         id: r["Inbox ID"], module: r["Module"], type: r["Item type"], title: r["Title"],
         dueDate: isoDate_(r["Due date"]), dueTime: isoTime_(r["Due time"]), venue: r["Venue or link"],
         notes: r["Notes"], priority: r["Priority"], processed: r["Processed"] === true,
-        sendToCalendar: r["Send to Calendar"] === true, filedType: filedType
+        sendToCalendar: r["Send to Calendar"] === true, filedType: resolvedFiled.filedType, filedId: resolvedFiled.filedId
       };
     });
 
@@ -648,6 +682,22 @@ function api_getPlannerData() {
     var guideEntries = readUserGuide_();
     var currentPhaseIndex = currentSemesterPhaseIndex_();
 
+    // v1.4.2 -- flat {module,type,date} list straight off "05 Timetable
+    // Import", used only to find each module's next Tutorial session (see
+    // computeAcademicIntelligence_'s nextTutorialByModule) -- a tutorial is
+    // when AF tests actually get written, so it's its own priority signal
+    // alongside the next A1/A2/A3. [] on a workbook with no timetable data,
+    // never fabricated.
+    var timetableData = getSheetRowsRaw_(TIMETABLE_SHEET, HEADER_ROW);
+    var timetableSessions = [];
+    if (timetableData) {
+      var ttDateIdx = timetableData.headers.indexOf("Start date"), ttModuleIdx = timetableData.headers.indexOf("Module"), ttTypeIdx = timetableData.headers.indexOf("Session type");
+      timetableData.rows.forEach(function (r) {
+        if (!r[ttModuleIdx]) return;
+        timetableSessions.push({ module: r[ttModuleIdx], type: r[ttTypeIdx], date: isoDate_(r[ttDateIdx]) });
+      });
+    }
+
     // v1.3.0 -- Deterministic Academic Intelligence. Reuses every array
     // already built above (no extra sheet reads except "22 Exam Focus Log",
     // which v1.2.0 never read at all). See computeAcademicIntelligence_ for
@@ -659,7 +709,7 @@ function api_getPlannerData() {
     var academicIntelligence = computeAcademicIntelligence_({
       modules: modules, marksTracker: marksTracker, assessments: assessments, studySessions: studySessions,
       studyTasks: studyTasks, revisionTracker: revisionTracker, resources: resources, afComponents: afComponents,
-      settings: settings, logRows: syncLog, todayIso: isoDate_(new Date())
+      settings: settings, logRows: syncLog, todayIso: isoDate_(new Date()), timetableSessions: timetableSessions
     });
 
     return ok_({
@@ -770,6 +820,24 @@ function buildMonthGrid_() {
   return days;
 }
 
+// v1.4.0 -- Google Calendar pull-sync for the monthly view, lazy-loaded by
+// the frontend when the Calendar screen opens (same pattern as
+// api_getWeekTimetable / api_semDashboard) rather than folded into every
+// api_getPlannerData call, since it makes an external Calendar API request.
+// Read-only: never writes anything. See buildExternalCalendarEvents_ for
+// what "external" means here (excludes events this workbook itself created).
+function api_getExternalCalendarEvents() {
+  try {
+    var tz = TIMEZONE;
+    var today = new Date();
+    var year = Number(Utilities.formatDate(today, tz, "yyyy"));
+    var month = Number(Utilities.formatDate(today, tz, "M")); // 1-12
+    var monthStart = new Date(year, month - 1, 1);
+    var monthEndExclusive = new Date(year, month, 1);
+    return ok_(buildExternalCalendarEvents_(monthStart, monthEndExclusive));
+  } catch (e) { return fail_(e); }
+}
+
 // v1.1.12 master -- Feature 10 (Weekly Timetable preview). buildCurrentWeek_
 // used to hardcode "today" internally; it is now a one-line wrapper around
 // buildWeekForDate_(anchorDate) so the exact same grouping/sorting logic
@@ -806,11 +874,20 @@ function buildWeekForDate_(anchorDate) {
       if (d < monday || d > friday) return;
       var dayLabel = r[iDay] || labels[(d.getDay() + 6) % 7];
       if (!byDay[dayLabel]) return;
+      var startMin = r[iStart] instanceof Date ? r[iStart].getHours() * 60 + r[iStart].getMinutes() : null;
+      var endMin = r[iEnd] instanceof Date ? r[iEnd].getHours() * 60 + r[iEnd].getMinutes() : null;
       byDay[dayLabel].push({
         module: r[iModule],
         time: (r[iStart] instanceof Date ? Utilities.formatDate(r[iStart], tz, "HH:mm") : "") + "–" + (r[iEnd] instanceof Date ? Utilities.formatDate(r[iEnd], tz, "HH:mm") : ""),
         type: r[iType], venue: iVenue >= 0 ? r[iVenue] : "",
-        color: colorIdx[r[iModule]] || "#8B8B87", _sort: r[iStart] instanceof Date ? r[iStart].getHours() * 60 + r[iStart].getMinutes() : 0,
+        color: colorIdx[r[iModule]] || "#8B8B87",
+        // v1.4.0 -- kept through to the client (previously computed only to
+        // sort here, then deleted) so the Weekly Timetable can position each
+        // class by its real clock time instead of just stacking cards in
+        // order -- a 08:00 class and a 10:00 class on different days used to
+        // render as each column's first card, vertically aligned with each
+        // other despite being 2 hours apart.
+        startMin: startMin, endMin: endMin,
         // v1.2.0 -- carry the exact class date through so the frontend can
         // build a Module|SessionType|DateISO attendance session key without
         // a second lookup (Feature 7).
@@ -819,8 +896,7 @@ function buildWeekForDate_(anchorDate) {
     });
   }
   return labels.map(function (label) {
-    var sessions = byDay[label].sort(function (a, b) { return a._sort - b._sort; });
-    sessions.forEach(function (s) { delete s._sort; });
+    var sessions = byDay[label].sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); });
     return { label: label, sessions: sessions };
   });
 }
@@ -917,29 +993,66 @@ function api_toggleInboxProcessed(inboxId, processed) {
  * touches any Assignment/Assessment it may already have been filed as, and
  * never touches Calendar. The frontend confirmation modal is responsible for
  * explaining that distinction to the user before this is ever called.
+ * Core logic factored into deleteInboxRowCore_ (no locking of its own) so
+ * api_deleteInboxItemAndFiled below can run it under a single outer lock
+ * alongside the filed-record delete, instead of nesting two independent
+ * LockService acquisitions in one execution.
  */
+function deleteInboxRowCore_(inboxId) {
+  var id = requireText_(inboxId, "Inbox ID", 40);
+  var sheet = SpreadsheetApp.getActive().getSheetByName(INBOX_SHEET);
+  if (!sheet) return fail_(new Error("Sheet not found: " + INBOX_SHEET));
+  var map = getColMap_(sheet);
+  var lastRow = sheet.getLastRow();
+  var idCol = col_(map, "Inbox ID");
+  var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
+  var targetRow = -1;
+  for (var i = 0; i < ids.length; i++) { if (ids[i][0] === id) { targetRow = HEADER_ROW + 1 + i; break; } }
+  if (targetRow === -1) return fail_(new Error("Could not find Inbox item " + id + " — it may already have been deleted."));
+  var wasProcessed = sheet.getRange(targetRow, col_(map, "Processed")).getValue() === true;
+  // v1.2.0 -- capture the human title before deleting, so the activity log
+  // shows the title rather than a bare Inbox ID (Feature: human-readable
+  // activity history). The ID is kept in the detail text.
+  var title = map["Title"] ? sheet.getRange(targetRow, col_(map, "Title")).getValue() : id;
+  sheet.deleteRow(targetRow);
+  logAutomation_("Inbox item deleted", title || id, "Deleted", "ID " + id + "; row " + targetRow + (wasProcessed ? " (was processed)" : ""));
+  return ok_({ inboxId: id, wasProcessed: wasProcessed });
+}
 function api_deleteInboxItem(inboxId) {
   var lock = LockService.getScriptLock();
   try {
     if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
-    var id = requireText_(inboxId, "Inbox ID", 40);
-    var sheet = SpreadsheetApp.getActive().getSheetByName(INBOX_SHEET);
-    if (!sheet) return fail_(new Error("Sheet not found: " + INBOX_SHEET));
-    var map = getColMap_(sheet);
-    var lastRow = sheet.getLastRow();
-    var idCol = col_(map, "Inbox ID");
-    var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
-    var targetRow = -1;
-    for (var i = 0; i < ids.length; i++) { if (ids[i][0] === id) { targetRow = HEADER_ROW + 1 + i; break; } }
-    if (targetRow === -1) return fail_(new Error("Could not find Inbox item " + id + " — it may already have been deleted."));
-    var wasProcessed = sheet.getRange(targetRow, col_(map, "Processed")).getValue() === true;
-    // v1.2.0 -- capture the human title before deleting, so the activity log
-    // shows the title rather than a bare Inbox ID (Feature: human-readable
-    // activity history). The ID is kept in the detail text.
-    var title = map["Title"] ? sheet.getRange(targetRow, col_(map, "Title")).getValue() : id;
-    sheet.deleteRow(targetRow);
-    logAutomation_("Inbox item deleted", title || id, "Deleted", "ID " + id + "; row " + targetRow + (wasProcessed ? " (was processed)" : ""));
-    return ok_({ inboxId: id, wasProcessed: wasProcessed });
+    return deleteInboxRowCore_(inboxId);
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
+/**
+ * v1.4.0 -- companion to api_deleteInboxItem for the case the delete
+ * confirmation modal now explicitly offers: also delete the Assignment/
+ * Assessment this Inbox item was already filed as (and its Calendar event,
+ * if `deleteCalendarEvent` is true), not just the Inbox capture. `filedType`
+ * / `filedId` come from the Inbox item's own filedType/filedId (resolved by
+ * resolveFiledRecord_ in api_getPlannerData) -- never re-derived by title/
+ * module matching, which could hit the wrong row.
+ * The filed record is deleted FIRST; if that fails (or if a requested
+ * Calendar deletion fails), the Inbox row is left untouched too, so a
+ * partial failure never silently leaves things half-deleted.
+ */
+function api_deleteInboxItemAndFiled(inboxId, filedType, filedId, deleteCalendarEvent) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var filedResult = null;
+    if (filedType && filedId) {
+      var sheetName = filedType === "Assignment" ? ASSIGNMENTS_SHEET : filedType === "Assessment" ? ASSESSMENTS_SHEET : null;
+      var idHeader = filedType === "Assignment" ? "Assignment ID" : "Assessment ID";
+      if (!sheetName) return fail_(new Error("Unknown filed type: " + filedType));
+      filedResult = deleteEntityRowCore_(sheetName, idHeader, filedId, !!deleteCalendarEvent, filedType);
+      if (!filedResult.ok) return filedResult;
+    }
+    var inboxResult = deleteInboxRowCore_(inboxId);
+    if (!inboxResult.ok) return inboxResult;
+    return ok_({ inboxId: inboxId, filed: filedResult ? filedResult.data : null });
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
@@ -1059,6 +1172,19 @@ function api_addMarkEntry(moduleCode, moduleName, form) {
       sheet.getRange(foundRow, col_(map, "Excused or excluded")).setValue(excusedVal);
       sheet.getRange(foundRow, col_(map, "Included in AF")).setValue(!!form.includeInAf);
       if (map["Notes"]) sheet.getRange(foundRow, col_(map, "Notes")).setValue(notesVal);
+      // v1.4.1 -- Item type / Weight, both optional, both no-ops if the
+      // AF_Components_v1.4.1_Migration.gs columns haven't been added yet
+      // (never throws just because that migration hasn't run).
+      if (map["Item type"] && VALID_AF_ITEM_TYPES.indexOf(form.itemType) !== -1) {
+        sheet.getRange(foundRow, col_(map, "Item type")).setValue(form.itemType);
+      }
+      if (map["Weight"]) {
+        if (form.weight === "" || form.weight === null || typeof form.weight === "undefined") {
+          sheet.getRange(foundRow, col_(map, "Weight")).setValue("");
+        } else {
+          sheet.getRange(foundRow, col_(map, "Weight")).setValue(requireFiniteNumber_(form.weight, "Weight", 0, null));
+        }
+      }
       // Percentage column is a pre-existing formula (=Mark/Maximum*100) — never overwritten here.
       logAutomation_("Mark entered (AF)", verifiedModuleName + " — " + name, "Saved", mark + "/" + max);
       var afItemId = sheet.getRange(foundRow, col_(map, "AF Item ID")).getValue();
@@ -1122,7 +1248,7 @@ function api_setPublishedFinalBeforeA3(moduleCode, value) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map["Published Final (Before A3)"]) {
       throw new Error('"Published Final (Before A3)" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
     }
@@ -1135,6 +1261,39 @@ function api_setPublishedFinalBeforeA3(moduleCode, value) {
     mtSheet.getRange(mtRow, col_(map, "Published Final (Before A3)")).setValue(pct);
     logAutomation_("Published Final (Before A3) entered", moduleCode, "Saved", pct + "%");
     return ok_({ row: mtRow, pct: pct });
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
+// ------------------------------------------------------------------
+// v1.4.0 -- "Published Final (After A3)". Mirrors
+// api_setPublishedFinalBeforeA3 exactly, one column over: for a module that
+// does not publish a raw A3 mark, only a new combined final percentage once
+// A3 is marked. Read by mi_computeMarksIntelligence_ as an alternative
+// candidate for the Official Final Mark (the higher of the computed value
+// and this one wins) -- never by Hidden A2 inference, which only reads the
+// Before-A3 field. Writing here never touches AF, A1, A2, A3, or any other
+// column.
+// ------------------------------------------------------------------
+function api_setPublishedFinalAfterA3(moduleCode, value) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var mtRow = findMarksTrackerRow_(moduleCode);
+    if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
+    var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
+    if (!map["Published Final (After A3)"]) {
+      throw new Error('"Published Final (After A3)" column not found -- run Marks_Intelligence_v1.4.0_Migration.gs first.');
+    }
+    if (value === "" || value === null || typeof value === "undefined") {
+      mtSheet.getRange(mtRow, col_(map, "Published Final (After A3)")).setValue("");
+      logAutomation_("Published Final (After A3) cleared", moduleCode, "Cleared", "");
+      return ok_({ row: mtRow, pct: null });
+    }
+    var pctAfter = requireFiniteNumber_(value, "Published Final (After A3)", 0, 100);
+    mtSheet.getRange(mtRow, col_(map, "Published Final (After A3)")).setValue(pctAfter);
+    logAutomation_("Published Final (After A3) entered", moduleCode, "Saved", pctAfter + "%");
+    return ok_({ row: mtRow, pct: pctAfter });
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
@@ -1161,7 +1320,7 @@ function api_setAssessmentStatus(moduleCode, assessment, status) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map[header]) throw new Error('"' + header + '" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
 
     if (status === "" || status === null || typeof status === "undefined") {
@@ -1197,7 +1356,7 @@ function api_setDcaMark(moduleCode, value) {
     var mtRow = findMarksTrackerRow_(moduleCode);
     if (mtRow === -1) throw new Error("Module not found in Marks Tracker: " + moduleCode);
     var mtSheet = SpreadsheetApp.getActive().getSheetByName(MARKS_TRACKER_SHEET);
-    var map = getColMap_(mtSheet);
+    var map = getColMap_(mtSheet, MARKS_TRACKER_HEADER_ROW);
     if (!map["DCA mark (%)"]) throw new Error('"DCA mark (%)" column not found -- run Marks_Intelligence_v1.3.1_Migration.gs first.');
 
     if (value === "" || value === null || typeof value === "undefined") {
@@ -1261,59 +1420,67 @@ function api_deleteAfEntry(afItemId) {
 // requested Calendar deletion fails, the workbook row is NOT deleted either,
 // so nothing is ever silently left out of sync between the two.
 // ============================================================
+// Core logic with no locking of its own -- deleteEntityRow_ below wraps it
+// with a single LockService acquisition for a normal single-record delete;
+// api_deleteInboxItemAndFiled calls it directly under ITS OWN outer lock
+// instead, so one execution never nests two independent script-lock
+// acquisitions.
+function deleteEntityRowCore_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel) {
+  if (!entityId) return fail_(new Error("No " + idHeader + " given."));
+  var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (!sheet) return fail_(new Error("Sheet not found: " + sheetName));
+  var map = getColMap_(sheet);
+  var lastRow = sheet.getLastRow();
+  var idCol = col_(map, idHeader);
+  var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
+  var targetRow = -1;
+  for (var i = 0; i < ids.length; i++) { if (ids[i][0] === entityId) { targetRow = HEADER_ROW + 1 + i; break; } }
+  if (targetRow === -1) return fail_(new Error("Could not find " + logLabel + " " + entityId + " — it may already have been deleted."));
+
+  // v1.2.0 -- capture a human label before deleting, so the activity log
+  // reads as a title (Assignments/Assessments) or "Module — Topic/Study
+  // type" (Study Planner, which has no Title column) instead of a bare
+  // stable ID (Feature: human-readable activity history). Purely a
+  // logging-text change -- the delete logic and return contract below are
+  // unchanged.
+  var humanLabel = entityId;
+  if (map["Title"]) {
+    var titleVal = sheet.getRange(targetRow, col_(map, "Title")).getValue();
+    if (titleVal) humanLabel = titleVal;
+  } else if (map["Module"]) {
+    var modVal = sheet.getRange(targetRow, col_(map, "Module")).getValue();
+    var topicVal = map["Topic"] ? sheet.getRange(targetRow, col_(map, "Topic")).getValue()
+      : (map["Study type"] ? sheet.getRange(targetRow, col_(map, "Study type")).getValue() : "");
+    humanLabel = topicVal ? (modVal + " — " + topicVal) : modVal;
+  }
+
+  var calendarEventId = map["Calendar Event ID"] ? sheet.getRange(targetRow, col_(map, "Calendar Event ID")).getValue() : "";
+  var calendarResult = "Not requested";
+  if (calendarEventId) {
+    if (deleteCalendarEvent) {
+      var delResult = deleteCalendarEventByStoredId_(calendarEventId);
+      if (!delResult.ok) {
+        // Do not pretend success and do not delete the workbook row either
+        // -- leaving both sides intact (row + stale-but-real Calendar
+        // event) is recoverable; deleting the row while the event survives
+        // untracked would not be.
+        return fail_(new Error("Calendar event could not be deleted (" + delResult.error + "). The " + logLabel + " row was NOT deleted either — try again."));
+      }
+      calendarResult = delResult.alreadyGone ? "Already gone from Calendar" : "Deleted";
+    } else {
+      calendarResult = "Left in Calendar (event " + calendarEventId + ")";
+    }
+  }
+
+  sheet.deleteRow(targetRow);
+  logAutomation_(logLabel + " deleted", humanLabel, "Deleted", "ID " + entityId + "; row " + targetRow + "; calendar: " + calendarResult);
+  return ok_({ id: entityId, calendarEventId: calendarEventId || null, calendarResult: calendarResult });
+}
 function deleteEntityRow_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel) {
   var lock = LockService.getScriptLock();
   try {
     if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
-    if (!entityId) return fail_(new Error("No " + idHeader + " given."));
-    var sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
-    if (!sheet) return fail_(new Error("Sheet not found: " + sheetName));
-    var map = getColMap_(sheet);
-    var lastRow = sheet.getLastRow();
-    var idCol = col_(map, idHeader);
-    var ids = sheet.getRange(HEADER_ROW + 1, idCol, Math.max(lastRow - HEADER_ROW, 0), 1).getValues();
-    var targetRow = -1;
-    for (var i = 0; i < ids.length; i++) { if (ids[i][0] === entityId) { targetRow = HEADER_ROW + 1 + i; break; } }
-    if (targetRow === -1) return fail_(new Error("Could not find " + logLabel + " " + entityId + " — it may already have been deleted."));
-
-    // v1.2.0 -- capture a human label before deleting, so the activity log
-    // reads as a title (Assignments/Assessments) or "Module — Topic/Study
-    // type" (Study Planner, which has no Title column) instead of a bare
-    // stable ID (Feature: human-readable activity history). Purely a
-    // logging-text change -- the delete logic and return contract below are
-    // unchanged.
-    var humanLabel = entityId;
-    if (map["Title"]) {
-      var titleVal = sheet.getRange(targetRow, col_(map, "Title")).getValue();
-      if (titleVal) humanLabel = titleVal;
-    } else if (map["Module"]) {
-      var modVal = sheet.getRange(targetRow, col_(map, "Module")).getValue();
-      var topicVal = map["Topic"] ? sheet.getRange(targetRow, col_(map, "Topic")).getValue()
-        : (map["Study type"] ? sheet.getRange(targetRow, col_(map, "Study type")).getValue() : "");
-      humanLabel = topicVal ? (modVal + " — " + topicVal) : modVal;
-    }
-
-    var calendarEventId = map["Calendar Event ID"] ? sheet.getRange(targetRow, col_(map, "Calendar Event ID")).getValue() : "";
-    var calendarResult = "Not requested";
-    if (calendarEventId) {
-      if (deleteCalendarEvent) {
-        var delResult = deleteCalendarEventByStoredId_(calendarEventId);
-        if (!delResult.ok) {
-          // Do not pretend success and do not delete the workbook row either
-          // -- leaving both sides intact (row + stale-but-real Calendar
-          // event) is recoverable; deleting the row while the event survives
-          // untracked would not be.
-          return fail_(new Error("Calendar event could not be deleted (" + delResult.error + "). The " + logLabel + " row was NOT deleted either — try again."));
-        }
-        calendarResult = delResult.alreadyGone ? "Already gone from Calendar" : "Deleted";
-      } else {
-        calendarResult = "Left in Calendar (event " + calendarEventId + ")";
-      }
-    }
-
-    sheet.deleteRow(targetRow);
-    logAutomation_(logLabel + " deleted", humanLabel, "Deleted", "ID " + entityId + "; row " + targetRow + "; calendar: " + calendarResult);
-    return ok_({ id: entityId, calendarEventId: calendarEventId || null, calendarResult: calendarResult });
+    return deleteEntityRowCore_(sheetName, idHeader, entityId, deleteCalendarEvent, logLabel);
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
@@ -1503,7 +1670,7 @@ function api_archiveSemester() {
     var mt = ss.getSheetByName(MARKS_TRACKER_SHEET);
     var archive = ss.getSheetByName(ARCHIVE_SHEET);
     var semesterName = getSetting_("Semester name") || "Unknown semester";
-    var mtMap = getColMap_(mt);
+    var mtMap = getColMap_(mt, MARKS_TRACKER_HEADER_ROW);
     var lastRow = mt.getLastRow();
     var archiveRow = Math.max(archive.getLastRow() + 1, 13); // below 17 Archive's header block (row 12)
     var count = 0;
@@ -2012,7 +2179,19 @@ function api_deleteStudyTask(taskId) {
 // was accepted" half of the flow -- api_acceptStudySuggestions below is
 // completely unmodified from v1.2.0/RC2 and never runs automatically.
 // ------------------------------------------------------------------
-function api_generateStudySuggestions(weekAnchorIso) {
+/**
+ * `manualPriorities` (v1.4.3) is an OPTIONAL {moduleCode: category} map --
+ * category one of VALID_PRIORITY_OVERRIDES -- entered fresh in the Study
+ * Planner's "Which modules?" checklist immediately before this call and
+ * NEVER saved anywhere (replaces v1.4.2's persistent "Manual priority
+ * override" column, which kept silently overriding the computed category
+ * indefinitely once set -- see ai_computePriority_). Applies ONLY to this
+ * one generation: a module with no computed priority (e.g. Industrial
+ * Engineering, "Rules Incomplete") needs an entry here to be eligible at
+ * all; a module WITH a computed priority can still have its category
+ * overridden for just this call if you disagree with it on the day.
+ */
+function api_generateStudySuggestions(weekAnchorIso, manualPriorities) {
   try {
     var anchor = new Date();
     if (weekAnchorIso && /^\d{4}-\d{2}-\d{2}$/.test(weekAnchorIso)) {
@@ -2024,7 +2203,18 @@ function api_generateStudySuggestions(weekAnchorIso) {
     // re-implementing "what is each module's priority" a second time here.
     var plannerData = api_getPlannerData();
     if (!plannerData.ok) return plannerData;
-    var built = buildPrioritizedStudySuggestions_(anchor, plannerData.data.priorities, plannerData.data.revisionTracker, plannerData.data.resources, plannerData.data.studyTasks);
+    // v1.4.3 -- apply the ephemeral overrides to a COPY of the computed
+    // priorities, never to plannerData.data.priorities itself -- nothing
+    // here is written back to any sheet.
+    var priorities = plannerData.data.priorities.map(function (p) {
+      var override = manualPriorities && manualPriorities[p.code];
+      if (!override || VALID_PRIORITY_OVERRIDES.indexOf(override) === -1) return p;
+      return Object.assign({}, p, {
+        category: override, score: null,
+        reasons: ["Priority entered for this generation only: \"" + override + "\" -- not saved."]
+      });
+    });
+    var built = buildPrioritizedStudySuggestions_(anchor, priorities, plannerData.data.revisionTracker, plannerData.data.resources, plannerData.data.studyTasks);
     return ok_(built);
   } catch (e) { return fail_(e); }
 }
@@ -2403,6 +2593,40 @@ function api_updateRevisionTopic(module, topic, form) {
   } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
 }
 
+/**
+ * v1.4.5 -- "13 Revision Tracker" had no delete path at all, for a topic
+ * added either manually (api_addRevisionTopic) or automatically (a
+ * completed Study Planner session / logged independent study first
+ * creating it). Matches the same (Module, Topic) pair every other Revision
+ * Tracker function already uses to find a row -- there is no stable ID
+ * column on this sheet. If a Study Planner session later completes again
+ * for the same module+topic, it recreates the row fresh (find-or-create,
+ * same as every other completion path) -- deleting here does not delete
+ * the Study Planner session(s) that originally contributed to it.
+ */
+function api_deleteRevisionTopic(module, topic) {
+  var lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(LOCK_WAIT_MS)) return fail_(new Error("Workbook is busy — try again in a moment."));
+    var sheet = SpreadsheetApp.getActive().getSheetByName(REVISION_SHEET);
+    if (!sheet) return fail_(new Error("Sheet not found: " + REVISION_SHEET));
+    var map = getColMap_(sheet);
+    var lastRow = sheet.getLastRow();
+    var targetRow = -1;
+    if (lastRow > HEADER_ROW) {
+      var vals = sheet.getRange(HEADER_ROW + 1, 1, lastRow - HEADER_ROW, sheet.getLastColumn()).getValues();
+      var moduleCol = col_(map, "Module") - 1, topicCol = col_(map, "Topic") - 1;
+      for (var i = 0; i < vals.length; i++) {
+        if (vals[i][moduleCol] === module && vals[i][topicCol] === topic) { targetRow = HEADER_ROW + 1 + i; break; }
+      }
+    }
+    if (targetRow === -1) return fail_(new Error('No revision topic found for "' + topic + '" in ' + module + ' — it may already have been deleted.'));
+    sheet.deleteRow(targetRow);
+    logAutomation_("Revision topic deleted", module + " — " + topic, "Deleted", "row " + targetRow);
+    return ok_({});
+  } catch (e) { return fail_(e); } finally { lock.releaseLock(); }
+}
+
 // ------------------------------------------------------------------
 // RESOURCES — lightweight named-materials CRUD + type-specific progress
 // (Feature 6). Never uploads or stores a file -- Link/Notes stay plain text.
@@ -2747,6 +2971,12 @@ function api_saveModuleAcademicConfig(moduleCode, form) {
     if (typeof form.compulsoryPractical === "boolean" && map['Compulsory practical/lab (TRUE/FALSE)']) {
       sheet.getRange(targetRow, col_(map, 'Compulsory practical/lab (TRUE/FALSE)')).setValue(form.compulsoryPractical);
     }
+    // v1.4.2 -- Study Planner-specific include switch. (Manual priority
+    // override used to be settable here too -- retired in v1.4.3, see
+    // ai_computePriority_; priority is now entered fresh per generation.)
+    if (typeof form.includeInStudyPlan === "boolean" && map['Include in study plan (TRUE/FALSE)']) {
+      sheet.getRange(targetRow, col_(map, 'Include in study plan (TRUE/FALSE)')).setValue(form.includeInStudyPlan);
+    }
 
     logAutomation_("Module configuration saved", moduleCode, "Updated", "");
     return ok_({});
@@ -2842,6 +3072,15 @@ function isoWeekKey_(dateIso) {
  * which, purely so the reason string below can disclose it honestly.
  */
 function ai_computePriority_(m) {
+  // v1.4.3 -- the v1.4.2 persistent "Manual priority override" (03 Modules)
+  // was retired here: it silently kept overriding the computed category
+  // indefinitely once set, with no visible reminder, which produced
+  // confusing "why is this module's priority stuck?" results as a course
+  // progressed. The Marks Priority Engine goes back to reporting "Rules
+  // Incomplete" honestly for a module with no verified framework -- see
+  // api_generateStudySuggestions/buildPrioritizedStudySuggestions_ for
+  // where a module like that can still get study suggestions: a priority
+  // entered fresh each time you generate a plan, never saved.
   if (m.ruleStatus !== "Verified") {
     return { code: m.code, name: m.name, category: "Rules Incomplete", score: null,
       reasons: ["Module Rules for " + m.name + " are not marked \"Verified\" in 04 Module Rules -- no priority is computed until rules are verified."] };
@@ -2872,6 +3111,14 @@ function ai_computePriority_(m) {
   if (typeof m.daysToNextAssessment === "number" && m.daysToNextAssessment >= 0) {
     if (m.daysToNextAssessment <= 7) { score += 30; reasons.push("Next assessment (" + (m.nextAssessmentLabel || "upcoming") + ") is in " + m.daysToNextAssessment + " day(s)."); }
     else if (m.daysToNextAssessment <= 14) { score += 15; reasons.push("Next assessment (" + (m.nextAssessmentLabel || "upcoming") + ") is in " + m.daysToNextAssessment + " days."); }
+  }
+  // v1.4.2 -- a tutorial is when this module's AF tests actually get
+  // written, so it deserves its own (smaller, since tutorials are frequent
+  // and lower-stakes individually than a formal A1/A2/A3) proximity boost,
+  // separate from and additive to the exam-proximity one above.
+  if (typeof m.daysToNextTutorial === "number" && m.daysToNextTutorial >= 0) {
+    if (m.daysToNextTutorial <= 3) { score += 20; reasons.push("Next tutorial (" + (m.nextTutorialLabel || "upcoming") + ") is in " + m.daysToNextTutorial + " day(s) -- this is when this module's AF tests are written."); }
+    else if (m.daysToNextTutorial <= 7) { score += 10; reasons.push("Next tutorial (" + (m.nextTutorialLabel || "upcoming") + ") is in " + m.daysToNextTutorial + " days."); }
   }
   if (m.repeated) { score += 15; reasons.push("Repeated module -- elevated monitoring applies regardless of current mark."); }
   if (typeof m.difficulty === "number" && m.difficulty >= 4) { score += 10; reasons.push("High conceptual difficulty (" + m.difficulty + "/5)."); }
@@ -3558,6 +3805,22 @@ function computeAcademicIntelligence_(bundle) {
     }
   });
 
+  // v1.4.2 -- next scheduled Tutorial session per module (05 Timetable
+  // Import), same "never negative, keep the soonest" shape as
+  // nextAssessmentByModule above. bundle.timetableSessions is [] on a
+  // workbook where 05 Timetable Import is empty or missing -- degrades to
+  // "no tutorial signal" for every module, never a fabricated date.
+  var nextTutorialByModule = {};
+  (bundle.timetableSessions || []).forEach(function (s) {
+    if (s.type !== "Tutorial" || !s.date) return;
+    var d = daysBetween_(todayIso, s.date);
+    if (d === null || d < 0) return;
+    var existing = nextTutorialByModule[s.module];
+    if (!existing || d < existing.days) {
+      nextTutorialByModule[s.module] = { days: d, label: "Tutorial", date: s.date };
+    }
+  });
+
   var incompleteTasksByModule = {}, weakTopicsByModule = {}, weakSinceByModule = {};
   bundle.studyTasks.forEach(function (t) {
     if (!t.completed) incompleteTasksByModule[t.module] = (incompleteTasksByModule[t.module] || 0) + 1;
@@ -3623,9 +3886,13 @@ function computeAcademicIntelligence_(bundle) {
     if (practiceTypes.indexOf(s.type) !== -1) practiceByModule[s.module] = (practiceByModule[s.module] || 0) + 1;
   });
 
-  var prioritized = bundle.modules.filter(function (m) { return m.active; }).map(function (m) {
+  // v1.4.2 -- "Include in study plan" (03 Modules) is a Study Planner-
+  // specific filter, separate from "active" -- a module can be Active
+  // (shows in Attendance/Calendar/etc.) but excluded here, or vice versa.
+  var prioritized = bundle.modules.filter(function (m) { return m.active && m.includeInStudyPlan; }).map(function (m) {
     var marksRow = marksByModule[m.name];
     var nextA = nextAssessmentByModule[m.name];
+    var nextT = nextTutorialByModule[m.name];
     var scores = (scoresByModule[m.name] || []).map(function (r) { return r.score; });
     // Prefer 11 Marks Tracker's own "Final / provisional (after A3)" value
     // when it's actually recorded; otherwise fall back to Marks
@@ -3646,6 +3913,7 @@ function computeAcademicIntelligence_(bundle) {
       currentMarkIsEstimatedFallback: usedEstimatedFallback,
       targetMarkOverride: m.targetMark, settingsTargetMark: bundle.settings.targetMark,
       daysToNextAssessment: nextA ? nextA.days : null, nextAssessmentLabel: nextA ? nextA.label : null,
+      daysToNextTutorial: nextT ? nextT.days : null, nextTutorialLabel: nextT ? nextT.label : null,
       repeated: m.repeated, difficulty: m.difficulty, workload: m.workload,
       incompleteTaskCount: incompleteTasksByModule[m.name] || 0, weakTopicCount: weakTopicsByModule[m.name] || 0,
       recentPracticeScores: scores, requiredFutureMark: requiredA3ByTarget(m, marksRow, (typeof m.targetMark === "number") ? m.targetMark : bundle.settings.targetMark)
@@ -3655,6 +3923,8 @@ function computeAcademicIntelligence_(bundle) {
     priority.daysToNextAssessment = input.daysToNextAssessment;
     priority.nextAssessmentLabel = input.nextAssessmentLabel;
     priority.nextAssessmentId = nextA ? nextA.id : null;
+    priority.daysToNextTutorial = input.daysToNextTutorial;
+    priority.nextTutorialLabel = input.nextTutorialLabel;
     return priority;
   });
 
@@ -4165,6 +4435,25 @@ function mi_computeFmpAndOfficial_(module, values, statuses, dcaMark) {
   var reasons = [], warnings = [];
   var weights = mi_getModuleWeights_(module);
 
+  // v1.4.3 -- pure-AF module: no A1/A2/A3 exam at all (e.g. Industrial
+  // Engineering IE 152, assessed entirely by projects + quizzes inside "10
+  // AF Components"). Declared in 04 Module Rules via AF weighting=1 (i.e.
+  // 100%, stored as a fraction of 1 -- same scale as every other module's
+  // weighting, e.g. 0.35 for 35%), A1 weighting=0, A2 weighting=0.
+  // FM1/FM2/FM3 can never resolve for a module like this -- they
+  // structurally require A1 AND A2 to be WRITTEN -- so this bypasses that
+  // gate entirely: AF % simply IS the Official Final Mark, live, with no
+  // manual re-entry into "Published Final" needed.
+  if (weights.complete && weights.af === 1 && weights.a1 === 0 && weights.a2 === 0) {
+    if (typeof values.af !== "number") {
+      reasons.push("This module has no exam (AF weighting = 100% in 04 Module Rules) -- Official Final Mark = AF %, but no AF % is available yet.");
+      return { fm1: null, fm2: null, fm3: null, rawFmp: null, officialFinalMark: null, winningRoute: null, dcaApplied: false, dcaInfo: null, capsApplied: [], values: values, weights: weights, reasons: reasons, warnings: warnings };
+    }
+    var afOnly = round1_(values.af);
+    reasons.push("This module has no exam (AF weighting = 100% in 04 Module Rules) -- Official Final Mark = AF % = " + afOnly + "%, taken directly (no A1/A2/A3 route needed).");
+    return { fm1: null, fm2: null, fm3: null, rawFmp: afOnly, officialFinalMark: afOnly, winningRoute: "AF only (no exam)", dcaApplied: false, dcaInfo: null, capsApplied: [], values: values, weights: weights, reasons: reasons, warnings: warnings };
+  }
+
   var dca = mi_applyDca_(values, !!(module && module.dcaEnabled), dcaMark);
   if (dca.applied) {
     reasons.push("Faculty Rule 3 (DCA) applied: " + dca.replacedComponent.toUpperCase() + " (" + dca.originalValue + "%, the lower of A2/A3) was replaced with the entered DCA mark (" + dca.dcaMark + "%) before FM1/FM2/FM3 were evaluated. Original mark preserved for audit.");
@@ -4631,6 +4920,28 @@ function mi_computeMarksIntelligence_(module, marksRow, passMark, distinctionMar
   var pipeline = mi_computeFmpAndOfficial_(module, { af: af, a1: a1, a2: a2Value, a3: a3 }, { a1Status: a1Status, a2Status: a2Status, a3Status: a3Status }, dcaMark);
   reasons = reasons.concat(pipeline.reasons);
 
+  // v1.4.0 -- "Published Final (After A3)": a module that publishes a new
+  // combined final percentage after A3 instead of a raw A3 mark. Folded in
+  // as an alternative candidate for the Official Final Mark, never a
+  // replacement of the computed pipeline outright -- the higher of the two
+  // wins, so a real A3 result (raw or published) can only ever raise the
+  // mark, exactly like every other FMp route (FM1/FM2/FM3 already share
+  // this same "best route wins" property).
+  var publishedAfterA3 = pctToNumber_(marksRow ? marksRow.publishedFinalAfterA3 : null);
+  if (typeof publishedAfterA3 === "number") {
+    if (typeof pipeline.officialFinalMark === "number") {
+      if (publishedAfterA3 > pipeline.officialFinalMark) {
+        reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% is higher than the computed Official Final Mark of " + pipeline.officialFinalMark + "% -- the published figure is used (a real A3 result can only raise your mark, never lower it).");
+        pipeline.officialFinalMark = publishedAfterA3;
+      } else {
+        reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% entered, but the computed Official Final Mark of " + pipeline.officialFinalMark + "% is already at least as high -- the computed value is kept.");
+      }
+    } else {
+      reasons.push("Published Final (After A3) of " + publishedAfterA3 + "% used directly as the Official Final Mark (not enough of A1/A2/A3 recorded individually to compute FM1/FM2/FM3).");
+      pipeline.officialFinalMark = publishedAfterA3;
+    }
+  }
+
   function statusFor(target, label) {
     if (typeof target !== "number") return { label: label, status: "Insufficient data", reasons: ["No " + label.toLowerCase() + " mark is configured for this module."] };
     if (typeof pipeline.officialFinalMark === "number") {
@@ -4672,6 +4983,7 @@ function mi_computeMarksIntelligence_(module, marksRow, passMark, distinctionMar
     a1Status: a1Status, a2Status: a2Status, a3Status: a3Status,
     a2Source: a2Source, inferredA2: (a2Source === "estimated") ? inferredA2 : null,
     publishedFinalBeforeA3: pctToNumber_(marksRow ? marksRow.publishedFinalBeforeA3 : null),
+    publishedFinalAfterA3: publishedAfterA3,
     dcaMarkOnFile: dcaMark, subminimumMode: module.subminimumMode || "",
     ruleStatus: module.ruleStatus || "", a3Verified: weights.a3Verified,
     reasons: reasons, warnings: pipeline.warnings || []
