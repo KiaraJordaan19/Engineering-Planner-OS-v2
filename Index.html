@@ -170,7 +170,9 @@ var GUIDE_FALLBACK = [
 ];
 var EMPTY_MARK_FORM = { type: 'AF', name: '', mark: '', max: '', date: '', includeInAf: true, written: true, excused: false, notes: '', error: '', saving: false, itemType: '', weight: '' };
 // v1.4.1 -- mirrors VALID_AF_ITEM_TYPES in AF_Components_v1.4.1_Migration.js.
-var VALID_AF_ITEM_TYPES_LIST = ['Tutorial test', 'Practical'];
+// v1.4.3 added 'Project'/'Quiz' for project+quiz-only modules (no tutorial
+// tests or practicals at all), e.g. Industrial Engineering.
+var VALID_AF_ITEM_TYPES_LIST = ['Tutorial test', 'Practical', 'Project', 'Quiz'];
 
 // ---- v1.2.0 ACADEMIC WORKFLOW RELEASE -- shared lookup tables for the new
 // Study Planner / Revision Tracker / Resources / Attendance / Module

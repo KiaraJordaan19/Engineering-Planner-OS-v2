@@ -46,9 +46,45 @@ function runMigrationStatusCheck() {
   checkColumn("Reminders Feed v1.4.0", ASSIGNMENTS_SHEET, HEADER_ROW, "Synced to Reminders", "runRemindersFeedV140Migration");
   checkColumn("AF Components v1.4.1 (item type + weighting)", AF_COMPONENTS_SHEET, HEADER_ROW, "Weight", "runAfComponentsV141Migration");
   checkColumn("Study Priority v1.4.2 (include toggle + manual priority)", MODULES_SHEET, HEADER_ROW, "Manual priority override", "runStudyPriorityV142Migration");
+  checkIe152NoExamStatus_(ss, lines);
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");
 
   migrationReport_("Migration status", lines);
+}
+
+/** IE 152's marker isn't a new column -- it's AF weighting=100/A1=0/A2=0 on
+ *  its own "04 Module Rules" row -- so this checks that combination directly
+ *  rather than via checkColumn/checkSheet above. */
+function checkIe152NoExamStatus_(ss, lines) {
+  var label = "IE 152 no-exam module v1.4.3";
+  var modSheet = ss.getSheetByName(MODULES_SHEET);
+  var mrSheet = ss.getSheetByName(MODULE_RULES_SHEET);
+  if (!modSheet || !mrSheet) { lines.push("? " + label + " — required sheet(s) not found."); return; }
+  var modMap = getColMap_(modSheet, HEADER_ROW);
+  var modLastRow = modSheet.getLastRow();
+  var nameCol = modMap["Module name"], codeCol = modMap["Module code"];
+  var targetCode = null;
+  if (nameCol && codeCol && modLastRow > HEADER_ROW) {
+    var modVals = modSheet.getRange(HEADER_ROW + 1, 1, modLastRow - HEADER_ROW, modSheet.getLastColumn()).getValues();
+    for (var i = 0; i < modVals.length; i++) {
+      if ((modVals[i][nameCol - 1] || "").toString().toLowerCase().indexOf("industrial engineering") !== -1) { targetCode = modVals[i][codeCol - 1]; break; }
+    }
+  }
+  if (!targetCode) { lines.push("○ " + label + " — no module with \"Industrial Engineering\" in its name found yet. Run runIe152NoExamV143Migration() once it's added."); return; }
+  var mrMap = getColMap_(mrSheet, HEADER_ROW);
+  var mrLastRow = mrSheet.getLastRow();
+  var mrCodeCol = mrMap["Module code"];
+  var applied = false;
+  if (mrCodeCol && mrLastRow > HEADER_ROW) {
+    for (var row = HEADER_ROW + 1; row <= mrLastRow; row++) {
+      if (mrSheet.getRange(row, mrCodeCol).getValue() !== targetCode) continue;
+      applied = mrMap["AF weighting"] && mrSheet.getRange(row, mrMap["AF weighting"]).getValue() === 100
+        && mrMap["A1 weighting"] && mrSheet.getRange(row, mrMap["A1 weighting"]).getValue() === 0
+        && mrMap["A2 weighting"] && mrSheet.getRange(row, mrMap["A2 weighting"]).getValue() === 0;
+      break;
+    }
+  }
+  lines.push((applied ? "✓ " : "○ ") + label + (applied ? " — already applied." : " — NOT applied yet. Run runIe152NoExamV143Migration()."));
 }

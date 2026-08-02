@@ -45,7 +45,11 @@
  * correction to this migration in the future is picked up by re-running),
  * same convention Marks_Intelligence_v1.4.0_Migration.gs already uses.
  */
-var VALID_AF_ITEM_TYPES = ["Tutorial test", "Practical"];
+// v1.4.3 -- "Project" and "Quiz" added for modules like Industrial
+// Engineering (IE 152) that are assessed entirely by group projects and
+// individual quizzes, no tutorial tests or practicals at all. See
+// Marks_Intelligence_v1.4.3_IE152_Migration.gs.
+var VALID_AF_ITEM_TYPES = ["Tutorial test", "Practical", "Project", "Quiz"];
 var VALID_MODULE_AF_ITEM_TYPES = ["Tutorial tests", "Practicals"];
 
 function runAfComponentsV141Migration() {

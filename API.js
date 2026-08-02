@@ -4435,6 +4435,23 @@ function mi_computeFmpAndOfficial_(module, values, statuses, dcaMark) {
   var reasons = [], warnings = [];
   var weights = mi_getModuleWeights_(module);
 
+  // v1.4.3 -- pure-AF module: no A1/A2/A3 exam at all (e.g. Industrial
+  // Engineering IE 152, assessed entirely by projects + quizzes inside "10
+  // AF Components"). Declared in 04 Module Rules via AF weighting=100%,
+  // A1 weighting=0%, A2 weighting=0%. FM1/FM2/FM3 can never resolve for a
+  // module like this -- they structurally require A1 AND A2 to be WRITTEN --
+  // so this bypasses that gate entirely: AF % simply IS the Official Final
+  // Mark, live, with no manual re-entry into "Published Final" needed.
+  if (weights.complete && weights.af === 100 && weights.a1 === 0 && weights.a2 === 0) {
+    if (typeof values.af !== "number") {
+      reasons.push("This module has no exam (AF weighting = 100% in 04 Module Rules) -- Official Final Mark = AF %, but no AF % is available yet.");
+      return { fm1: null, fm2: null, fm3: null, rawFmp: null, officialFinalMark: null, winningRoute: null, dcaApplied: false, dcaInfo: null, capsApplied: [], values: values, weights: weights, reasons: reasons, warnings: warnings };
+    }
+    var afOnly = round1_(values.af);
+    reasons.push("This module has no exam (AF weighting = 100% in 04 Module Rules) -- Official Final Mark = AF % = " + afOnly + "%, taken directly (no A1/A2/A3 route needed).");
+    return { fm1: null, fm2: null, fm3: null, rawFmp: afOnly, officialFinalMark: afOnly, winningRoute: "AF only (no exam)", dcaApplied: false, dcaInfo: null, capsApplied: [], values: values, weights: weights, reasons: reasons, warnings: warnings };
+  }
+
   var dca = mi_applyDca_(values, !!(module && module.dcaEnabled), dcaMark);
   if (dca.applied) {
     reasons.push("Faculty Rule 3 (DCA) applied: " + dca.replacedComponent.toUpperCase() + " (" + dca.originalValue + "%, the lower of A2/A3) was replaced with the entered DCA mark (" + dca.dcaMark + "%) before FM1/FM2/FM3 were evaluated. Original mark preserved for audit.");
