@@ -54,9 +54,10 @@ function runMigrationStatusCheck() {
   migrationReport_("Migration status", lines);
 }
 
-/** IE 152's marker isn't a new column -- it's AF weighting=100/A1=0/A2=0 on
- *  its own "04 Module Rules" row -- so this checks that combination directly
- *  rather than via checkColumn/checkSheet above. */
+/** IE 152's marker isn't a new column -- it's AF weighting=1/A1=0/A2=0 on
+ *  its own "04 Module Rules" row (weightings are stored as fractions of 1,
+ *  same scale as every other module) -- so this checks that combination
+ *  directly rather than via checkColumn/checkSheet above. */
 function checkIe152NoExamStatus_(ss, lines) {
   var label = "IE 152 no-exam module v1.4.3";
   var modSheet = ss.getSheetByName(MODULES_SHEET);
@@ -80,7 +81,7 @@ function checkIe152NoExamStatus_(ss, lines) {
   if (mrCodeCol && mrLastRow > HEADER_ROW) {
     for (var row = HEADER_ROW + 1; row <= mrLastRow; row++) {
       if (mrSheet.getRange(row, mrCodeCol).getValue() !== targetCode) continue;
-      applied = mrMap["AF weighting"] && mrSheet.getRange(row, mrMap["AF weighting"]).getValue() === 100
+      applied = mrMap["AF weighting"] && mrSheet.getRange(row, mrMap["AF weighting"]).getValue() === 1
         && mrMap["A1 weighting"] && mrSheet.getRange(row, mrMap["A1 weighting"]).getValue() === 0
         && mrMap["A2 weighting"] && mrSheet.getRange(row, mrMap["A2 weighting"]).getValue() === 0;
       break;

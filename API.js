@@ -4437,12 +4437,14 @@ function mi_computeFmpAndOfficial_(module, values, statuses, dcaMark) {
 
   // v1.4.3 -- pure-AF module: no A1/A2/A3 exam at all (e.g. Industrial
   // Engineering IE 152, assessed entirely by projects + quizzes inside "10
-  // AF Components"). Declared in 04 Module Rules via AF weighting=100%,
-  // A1 weighting=0%, A2 weighting=0%. FM1/FM2/FM3 can never resolve for a
-  // module like this -- they structurally require A1 AND A2 to be WRITTEN --
-  // so this bypasses that gate entirely: AF % simply IS the Official Final
-  // Mark, live, with no manual re-entry into "Published Final" needed.
-  if (weights.complete && weights.af === 100 && weights.a1 === 0 && weights.a2 === 0) {
+  // AF Components"). Declared in 04 Module Rules via AF weighting=1 (i.e.
+  // 100%, stored as a fraction of 1 -- same scale as every other module's
+  // weighting, e.g. 0.35 for 35%), A1 weighting=0, A2 weighting=0.
+  // FM1/FM2/FM3 can never resolve for a module like this -- they
+  // structurally require A1 AND A2 to be WRITTEN -- so this bypasses that
+  // gate entirely: AF % simply IS the Official Final Mark, live, with no
+  // manual re-entry into "Published Final" needed.
+  if (weights.complete && weights.af === 1 && weights.a1 === 0 && weights.a2 === 0) {
     if (typeof values.af !== "number") {
       reasons.push("This module has no exam (AF weighting = 100% in 04 Module Rules) -- Official Final Mark = AF %, but no AF % is available yet.");
       return { fm1: null, fm2: null, fm3: null, rawFmp: null, officialFinalMark: null, winningRoute: null, dcaApplied: false, dcaInfo: null, capsApplied: [], values: values, weights: weights, reasons: reasons, warnings: warnings };

@@ -21,11 +21,22 @@
  * this migration IE 152 would sit permanently at "Insufficient data" on
  * Marks Tracker no matter how many projects/quizzes you enter.
  *
- * This migration marks IE 152 in "04 Module Rules" as a pure-AF module (AF
- * weighting = 100%, A1/A2 weighting = 0%, Rule status = Verified). API.js
- * (mi_computeFmpAndOfficial_) recognises that exact combination and treats
- * AF % as the Official Final Mark directly — live, with no manual "Published
- * Final" re-entry needed every time it changes.
+ * This migration marks IE 152 in "04 Module Rules" as a pure-AF module: AF
+ * weighting = 1, A1/A2 weighting = 0, Rule status = Verified. Weightings on
+ * this sheet are stored as FRACTIONS OF 1 (e.g. 0.35 for a module weighted
+ * 35%), same scale as every other module — so "100%" here is stored as 1,
+ * not 100. API.js (mi_computeFmpAndOfficial_) recognises that exact
+ * combination and treats AF % as the Official Final Mark directly — live,
+ * with no manual "Published Final" re-entry needed every time it changes.
+ *
+ * v1.4.3.1 self-heal: the first release of this migration wrote AF
+ * weighting = 100 instead of 1 (wrong scale — displays as "10000%" once
+ * Sheets' percent formatting is applied to that cell). If a previous run of
+ * this migration produced that exact value, this run corrects it to 1. It
+ * also replaces IE 152's "General notes" if it still holds the placeholder
+ * text written earlier in this project's setup (before IE 152's real
+ * framework — no exam, project + quiz only — was confirmed from its module
+ * intro slides), which called it "tutorial-only" and is now factually wrong.
  *
  * The flattened FM formula above collapses to a single weighted average —
  * exactly what the "10 AF Components" weighted-AF-% engine
@@ -128,13 +139,42 @@ function runIe152NoExamV143Migration() {
     }
   }
 
-  setIfBlank('AF weighting', 100, 'AF weighting');
+  function fixWrongScale(header, wrongValue, rightValue, label) {
+    if (!mrMap[header]) return;
+    var cell = mrSheet.getRange(mrRow, mrMap[header]);
+    if (cell.getValue() === wrongValue) {
+      cell.setValue(rightValue);
+      report.push('Corrected ' + label + ' from ' + wrongValue + ' to ' + rightValue + ' (an earlier run of this migration wrote the wrong scale — see v1.4.3.1 self-heal note above).');
+    }
+  }
+
+  setIfBlank('AF weighting', 1, 'AF weighting');
+  fixWrongScale('AF weighting', 100, 1, 'AF weighting');
   setIfBlank('A1 weighting', 0, 'A1 weighting');
   setIfBlank('A2 weighting', 0, 'A2 weighting');
   setIfBlank('Rule status', 'Verified', 'Rule status');
   setIfBlank('AF calculation method',
     'No exam — Final Mark = weighted average of 4 Projects (Weight 24/24/24/8 in 10 AF Components) + best 2 of 3 Quizzes (Weight 10 each). AF % IS the Official Final Mark.',
     'AF calculation method');
+
+  // Replace the stale "tutorial-only" placeholder note, if still present,
+  // with the verified framework summary -- never touches a note that says
+  // anything else (including one you've since written yourself).
+  var staleNoteMarkers = ['tutorial-only', 'no af/a1/a2/a3 assessment framework', 'no assessment framework supplied'];
+  if (mrMap['General notes']) {
+    var notesCell = mrSheet.getRange(mrRow, mrMap['General notes']);
+    var currentNotes = (notesCell.getValue() || '').toString();
+    var isStale = false;
+    for (var m = 0; m < staleNoteMarkers.length; m++) {
+      if (currentNotes.toLowerCase().indexOf(staleNoteMarkers[m]) !== -1) { isStale = true; break; }
+    }
+    if (!currentNotes || isStale) {
+      notesCell.setValue('No exam — Final Mark = 4 group Projects (30/30/30/10%) + best 2 of 3 individual Quizzes (50/50%), per the module\'s own framework slide. AF % is the whole Final Mark.');
+      report.push((currentNotes ? 'Replaced the stale "tutorial-only" placeholder' : 'Set') + ' "General notes" with the verified framework summary.');
+    } else {
+      report.push('"General notes" already set to something else — left unchanged: "' + currentNotes + '".');
+    }
+  }
 
   report.push('');
   report.push(targetName + ' now has no A1/A2/A3 exam configured — Official Final Mark equals AF % directly (API.js: mi_computeFmpAndOfficial_), no more "Insufficient data" once AF % has a value.');
