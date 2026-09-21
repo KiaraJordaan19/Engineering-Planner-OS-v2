@@ -49,6 +49,7 @@ function runMigrationStatusCheck() {
   checkIe152NoExamStatus_(ss, lines);
   checkElectrotechniqueItemTypeStatus_(ss, lines);
   checkSubminimumModeStatus_(ss, lines);
+  checkDropLowest2Status_(ss, lines);
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");
@@ -143,4 +144,33 @@ function checkSubminimumModeStatus_(ss, lines) {
   }
   var applied = foundCount > 0 && setCount === foundCount;
   lines.push((applied ? "✓ " : "○ ") + label + " — " + setCount + "/" + foundCount + " of the 5 exam-based modules set." + (applied ? "" : " Run runSubminimumModeV145Migration()."));
+}
+
+/** Checks the "Drop lowest 2 tutorial marks" flag (04 Module Rules) for the
+ *  same 5 exam-based modules, and that the "Dropped (lowest 2 rule)" helper
+ *  column exists on "10 AF Components". Does not re-verify the formula text
+ *  itself -- only that the migration's marker column/flags are in place. */
+function checkDropLowest2Status_(ss, lines) {
+  var label = "Drop lowest 2 tutorial marks v1.4.6 (Faculty section 10.6)";
+  var mrSheet = ss.getSheetByName(MODULE_RULES_SHEET);
+  var afSheet = ss.getSheetByName(AF_COMPONENTS_SHEET);
+  if (!mrSheet || !afSheet) { lines.push("? " + label + " — required sheet(s) not found."); return; }
+  var afMap = getColMap_(afSheet, HEADER_ROW);
+  if (!afMap["Dropped (lowest 2 rule)"]) { lines.push("○ " + label + " — NOT applied yet. Run runDropLowest2V146Migration()."); return; }
+  var mrMap = getColMap_(mrSheet, HEADER_ROW);
+  var mrLastRow = mrSheet.getLastRow();
+  var codeCol = mrMap["Module code"], flagCol = mrMap["Drop lowest 2 tutorial marks (TRUE/FALSE)"];
+  if (!codeCol || !flagCol) { lines.push("? " + label + " — required column(s) not found on \"" + MODULE_RULES_SHEET + "\"."); return; }
+  var codes = ["20753-154", "12599-143", "38571-145", "30317-143", "19712-143"];
+  var setCount = 0, foundCount = 0;
+  if (mrLastRow > HEADER_ROW) {
+    for (var row = HEADER_ROW + 1; row <= mrLastRow; row++) {
+      var code = mrSheet.getRange(row, codeCol).getValue();
+      if (codes.indexOf(code) === -1) continue;
+      foundCount++;
+      if (mrSheet.getRange(row, flagCol).getValue() === true) setCount++;
+    }
+  }
+  var applied = foundCount > 0 && setCount === foundCount;
+  lines.push((applied ? "✓ " : "○ ") + label + " — " + setCount + "/" + foundCount + " of the 5 exam-based modules flagged." + (applied ? "" : " Run runDropLowest2V146Migration()."));
 }
