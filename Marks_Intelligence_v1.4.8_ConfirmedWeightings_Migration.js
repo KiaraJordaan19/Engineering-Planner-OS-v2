@@ -23,6 +23,19 @@
  *   Strength of Materials 143 (19712-143): wAF=0.15, wA1=0.35, wA2=0.5
  *     "FM = 0.15WAF + 0.35WA1 + 0.50WA2"
  *
+ * A3 WEIGHT: only Applied Mathematics B154 states it explicitly --
+ * "wA3 = wA2 = 0.5" (its own FMp3a formula literally uses wsum = wAF+wA2+wA3
+ * = 1.15, i.e. 0.15+0.5+0.5). Electrotechnique 143, Engineering Mathematics
+ * 145, Computer Programming 143 and Strength of Materials 143 all confirm A3
+ * EXISTS for them (exam dates in their own schedules), but none of their
+ * "Calculation of final marks" sections ever states its weight -- only
+ * wAF/wA1/wA2 are given. Per this project's existing design (API.js,
+ * mi_getModuleWeights_): A3's weight is deliberately never assumed equal to
+ * A2's or derived any other way without its own source, so it is NOT set
+ * for those four here -- their Required A3 Calculator stays unavailable
+ * until a real number is found (ask the module coordinator, or check
+ * SUNLearn for a fuller version of each framework).
+ *
  * Also confirmed directly from the same document (already implemented,
  * unaffected by this migration):
  *   - Applied Mathematics B154's own AF rule matches
@@ -59,7 +72,7 @@ function runConfirmedWeightingsV148Migration() {
   var ss = SpreadsheetApp.getActive();
 
   var confirmed = [
-    { code: '20753-154', name: 'Applied Mathematics B154', af: 0.15, a1: 0.35, a2: 0.5 },
+    { code: '20753-154', name: 'Applied Mathematics B154', af: 0.15, a1: 0.35, a2: 0.5, a3: 0.5 },
     { code: '38571-145', name: 'Engineering Mathematics 145', af: 0.1, a1: 0.35, a2: 0.55 },
     { code: '19712-143', name: 'Strength of Materials 143', af: 0.15, a1: 0.35, a2: 0.5 }
   ];
@@ -72,7 +85,7 @@ function runConfirmedWeightingsV148Migration() {
   var mrMap = getColMap_(mrSheet, HEADER_ROW);
   var mrLastRow = mrSheet.getLastRow();
   var codeCol = mrMap['Module code'];
-  var afCol = mrMap['AF weighting'], a1Col = mrMap['A1 weighting'], a2Col = mrMap['A2 weighting'], statusCol = mrMap['Rule status'];
+  var afCol = mrMap['AF weighting'], a1Col = mrMap['A1 weighting'], a2Col = mrMap['A2 weighting'], a3Col = mrMap['A3 weight (%) (verified)'], statusCol = mrMap['Rule status'];
   if (!codeCol || !afCol || !a1Col || !a2Col) {
     migrationReport_('Confirmed weightings v1.4.8 migration', ['Required column(s) not found on "' + MODULE_RULES_SHEET + '" — nothing to do.']);
     return;
@@ -103,6 +116,13 @@ function runConfirmedWeightingsV148Migration() {
     setIfBlankElseCompare(mrSheet.getRange(targetRow, afCol), m.af, 'AF weighting');
     setIfBlankElseCompare(mrSheet.getRange(targetRow, a1Col), m.a1, 'A1 weighting');
     setIfBlankElseCompare(mrSheet.getRange(targetRow, a2Col), m.a2, 'A2 weighting');
+    if (typeof m.a3 === 'number') {
+      if (a3Col) {
+        setIfBlankElseCompare(mrSheet.getRange(targetRow, a3Col), m.a3, 'A3 weight (%) (verified)');
+      } else {
+        report.push('  Column "A3 weight (%) (verified)" not found — skipped (run Marks_Intelligence_v1.3.1_Migration.gs first, it added this column).');
+      }
+    }
     if (statusCol) {
       var statusCell = mrSheet.getRange(targetRow, statusCol);
       if (!statusCell.getValue()) {
@@ -113,6 +133,7 @@ function runConfirmedWeightingsV148Migration() {
   });
 
   report.push('');
+  report.push('Applied Mathematics B154 now has a verified A3 weight (0.5) — its Required A3 Calculator can compute targets. Electrotechnique 143, Computer Programming 143, Engineering Mathematics 145 and Strength of Materials 143 do NOT have a confirmed A3 weight anywhere in the uploaded module frameworks — their Required A3 Calculators stay unavailable ("A3 rules incomplete") until a real number is found for them.');
   report.push('Applied Mathematics B154: remember the "drop lowest 2" rule becomes "drop lowest 3" for a student who also writes the optional Week-1 revision test — not implemented, flag to Claude if relevant.');
   report.push('Safe to run again at any time.');
   migrationReport_('Confirmed weightings v1.4.8 migration', report);
