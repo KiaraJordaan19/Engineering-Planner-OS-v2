@@ -48,6 +48,7 @@ function runMigrationStatusCheck() {
   checkColumn("Study Priority v1.4.2 (include toggle + manual priority)", MODULES_SHEET, HEADER_ROW, "Manual priority override", "runStudyPriorityV142Migration");
   checkIe152NoExamStatus_(ss, lines);
   checkElectrotechniqueItemTypeStatus_(ss, lines);
+  checkSubminimumModeStatus_(ss, lines);
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");
@@ -117,4 +118,29 @@ function checkElectrotechniqueItemTypeStatus_(ss, lines) {
   if (!current) { lines.push("✓ " + label + " — already applied (blank/unlocked)."); return; }
   if (current === "Tutorial tests") { lines.push("○ " + label + " — NOT applied yet. Run runElectrotechniqueV144Migration()."); return; }
   lines.push("? " + label + " — set to \"" + current + "\" (not blank, not the old auto-set value) — looks like a deliberate choice, left as-is.");
+}
+
+/** Checks "A2/A3 subminimum mode" for the 5 exam-based modules (not IE152,
+ *  which has no A2/A3 at all). "Applied" means every one of them is set to
+ *  the officially-confirmed reading. */
+function checkSubminimumModeStatus_(ss, lines) {
+  var label = "Subminimum mode v1.4.5 (Faculty Rule 1)";
+  var mrSheet = ss.getSheetByName(MODULE_RULES_SHEET);
+  if (!mrSheet) { lines.push("? " + label + " — \"" + MODULE_RULES_SHEET + "\" sheet not found."); return; }
+  var mrMap = getColMap_(mrSheet, HEADER_ROW);
+  var mrLastRow = mrSheet.getLastRow();
+  var codeCol = mrMap["Module code"], modeCol = mrMap["A2/A3 subminimum mode"];
+  if (!codeCol || !modeCol) { lines.push("? " + label + " — required column(s) not found."); return; }
+  var codes = ["20753-154", "12599-143", "38571-145", "30317-143", "19712-143"];
+  var setCount = 0, foundCount = 0;
+  if (mrLastRow > HEADER_ROW) {
+    for (var row = HEADER_ROW + 1; row <= mrLastRow; row++) {
+      var code = mrSheet.getRange(row, codeCol).getValue();
+      if (codes.indexOf(code) === -1) continue;
+      foundCount++;
+      if (mrSheet.getRange(row, modeCol).getValue() === "EACH_WRITTEN_ASSESSMENT_MUST_REACH_40") setCount++;
+    }
+  }
+  var applied = foundCount > 0 && setCount === foundCount;
+  lines.push((applied ? "✓ " : "○ ") + label + " — " + setCount + "/" + foundCount + " of the 5 exam-based modules set." + (applied ? "" : " Run runSubminimumModeV145Migration()."));
 }
