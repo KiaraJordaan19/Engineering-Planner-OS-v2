@@ -157,7 +157,7 @@ function runMarksIntelligenceV131Migration() {
   } else {
     var a3WeightResult = ensureColumn_(moduleRulesSheet, HEADER_ROW, 'A3 weight (%) (verified)');
     report.push(a3WeightResult.added
-      ? 'Added column to "04 Module Rules": "A3 weight (%) (verified)" (left blank — REQUIRED before this module\'s FM2/FM3/Required-A3 calculations become available; A3\'s weight is never derived, never assumed equal to A2\'s, never split evenly).'
+      ? 'Added column to "04 Module Rules": "A3 weight (%) (verified)" (left blank — since v1.4.9, blank means A3 weight is automatically DERIVED from this module\'s A2 weight, per Faculty Assessment Rules 4.2.1.7 ("WA3 = WA2"); only fill this in for a module with an approved deviation from that rule).'
       : 'Already present on "04 Module Rules": "A3 weight (%) (verified)".');
 
     var subminResult = ensureColumn_(moduleRulesSheet, HEADER_ROW, 'A2/A3 subminimum mode');
