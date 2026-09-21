@@ -72,7 +72,10 @@ function runAfComponentsV141Migration() {
     // module frameworks) -- never invented independently of it.
     var knownItemType = {
       "20753-154": "Tutorial tests",   // Applied Mathematics B154
-      "12599-143": "Tutorial tests",   // Electrotechniques 143
+      // "12599-143" (Electrotechniques) removed in v1.4.4 -- its official
+      // teaching load has both a practical period and tutorials, and both
+      // feed AF, so it's left unlocked (both item types selectable) instead
+      // of forced to one. See Marks_Intelligence_v1.4.4_Electrotechnique_Migration.js.
       "38571-145": "Tutorial tests",   // Engineering Mathematics 145
       "30317-143": "Practicals",       // Computer Programming 143 -- "Average of practical test marks"
       "19712-143": "Tutorial tests"    // Strength of Materials 143

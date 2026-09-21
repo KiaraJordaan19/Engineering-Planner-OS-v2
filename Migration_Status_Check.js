@@ -47,6 +47,7 @@ function runMigrationStatusCheck() {
   checkColumn("AF Components v1.4.1 (item type + weighting)", AF_COMPONENTS_SHEET, HEADER_ROW, "Weight", "runAfComponentsV141Migration");
   checkColumn("Study Priority v1.4.2 (include toggle + manual priority)", MODULES_SHEET, HEADER_ROW, "Manual priority override", "runStudyPriorityV142Migration");
   checkIe152NoExamStatus_(ss, lines);
+  checkElectrotechniqueItemTypeStatus_(ss, lines);
 
   lines.push("");
   lines.push("Legend: ✓ applied · ○ not applied. Every migration above is additive and idempotent — running an already-applied one again is safe and changes nothing.");
@@ -88,4 +89,32 @@ function checkIe152NoExamStatus_(ss, lines) {
     }
   }
   lines.push((applied ? "✓ " : "○ ") + label + (applied ? " — already applied." : " — NOT applied yet. Run runIe152NoExamV143Migration()."));
+}
+
+/** Electrotechnique's marker is the ABSENCE of a value (its "AF item type"
+ *  cell is meant to be blank/unlocked) -- so "applied" means blank, not a
+ *  new column. Reports "unknown" rather than a flat not-applied if it's set
+ *  to something other than blank or the old auto-set "Tutorial tests". */
+function checkElectrotechniqueItemTypeStatus_(ss, lines) {
+  var label = "Electrotechnique item type unlock v1.4.4";
+  var mrSheet = ss.getSheetByName(MODULE_RULES_SHEET);
+  if (!mrSheet) { lines.push("? " + label + " — \"" + MODULE_RULES_SHEET + "\" sheet not found."); return; }
+  var mrMap = getColMap_(mrSheet, HEADER_ROW);
+  var mrLastRow = mrSheet.getLastRow();
+  var codeCol = mrMap["Module code"], itemTypeCol = mrMap["AF item type"];
+  if (!codeCol || !itemTypeCol) { lines.push("? " + label + " — required column(s) not found."); return; }
+  var targetCode = "12599-143";
+  var found = false, current = "";
+  if (mrLastRow > HEADER_ROW) {
+    for (var row = HEADER_ROW + 1; row <= mrLastRow; row++) {
+      if (mrSheet.getRange(row, codeCol).getValue() !== targetCode) continue;
+      found = true;
+      current = mrSheet.getRange(row, itemTypeCol).getValue();
+      break;
+    }
+  }
+  if (!found) { lines.push("○ " + label + " — no \"04 Module Rules\" row found for " + targetCode + " (Electrotechnique) yet."); return; }
+  if (!current) { lines.push("✓ " + label + " — already applied (blank/unlocked)."); return; }
+  if (current === "Tutorial tests") { lines.push("○ " + label + " — NOT applied yet. Run runElectrotechniqueV144Migration()."); return; }
+  lines.push("? " + label + " — set to \"" + current + "\" (not blank, not the old auto-set value) — looks like a deliberate choice, left as-is.");
 }
