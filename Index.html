@@ -3361,6 +3361,60 @@ function whatIfSimulatorHtml_(mi) {
     whatIfResultHtml_(mi, code) + '</div>';
 }
 
+// v1.4.9 -- "Likely Path" indicator: a plain-language, always-visible
+// forecast of whether A3 is coming and, once knowable, which route (FM2 vs
+// FM3) currently looks like the better bet. Built entirely from numbers the
+// Marks Intelligence engine already computes server-side (mi.mtd,
+// mi.passStatus, mi.a3Recovery) -- no new calculation here, just surfacing
+// what was previously buried behind the "Show assessment status..." expand
+// toggle. Two clearly separated stages, since the confidence is genuinely
+// different:
+//  - BEFORE A2 is written: only AF+A1 (MTD) is known, so this is a rough,
+//    explicitly-labeled early signal, not a prediction of actual A3 access
+//    (the real trigger is FM1 < 50% AFTER A2, per the Faculty framework's
+//    own "did not meet requirements to pass after A2" wording -- not simply
+//    "A1 was low"). No route comparison is offered yet, because FM3 (AF+A2+
+//    A3) cannot be evaluated at all without a real A2 mark.
+//  - AFTER A2 is written: uses the actual computed Pass status and the
+//    already-existing A3 Recovery Calculator's "Best route" flag (same
+//    numbers shown in the calculator below, just surfaced without needing
+//    to expand the card).
+function likelyPathHtml_(mi) {
+  if (!mi || mi.status !== 'ok') return '';
+  var box = function (headline, detail, tone) {
+    var bg = tone === 'warn' ? '#FBEFD9' : '#EDEDED';
+    var fg = tone === 'warn' ? '#8A6D1D' : '#8A7A68';
+    return '<div style="background:' + bg + ';border-radius:10px;padding:10px 12px;margin-top:10px;">' +
+      '<div style="font-weight:700;font-size:12.5px;color:' + fg + ';">' + esc(headline) + '</div>' +
+      '<div style="font-size:12px;color:' + fg + ';margin-top:3px;">' + esc(detail) + '</div></div>';
+  };
+  var a2Written = mi.a2Status === 'written';
+
+  if (!a2Written) {
+    if (mi.mtd && mi.mtd.status === 'ok' && typeof mi.mtd.value === 'number' && mi.mtd.value < 50) {
+      return box('Early signal — you may end up needing A3',
+        'Rough estimate only (A2 hasn’t been written yet): your AF+A1 trend (MTD) is ' + mi.mtd.value + '%, below the 50% pass mark. A2 alone could still change this either way. Which of FM2/FM3 would suit you better can’t be worked out until A2 is in — FM3 needs a real A2 mark to mean anything.',
+        'warn');
+    }
+    return '';
+  }
+
+  if (mi.passStatus && mi.passStatus.status === 'At risk') {
+    var passTarget = mi.a3Recovery ? mi.a3Recovery.targets.filter(function (t) { return t.label === 'Pass'; })[0] : null;
+    var best = passTarget ? passTarget.routes.filter(function (r) { return r.isBest && !r.isInvalid; })[0] : null;
+    if (best && typeof best.regulationValidRequiredA3 === 'number') {
+      var routeLabel = best.route === 'FM2' ? 'FM2 (AF + A1 + A3)' : 'FM3 (AF + A2 + A3)';
+      return box('Likely need A3 — ' + routeLabel + ' currently looks best',
+        'You’re below the 50% pass mark after A2 (' + (typeof mi.rawFmp === 'number' ? mi.rawFmp + '%' : 'current FMp') + '), so you’ll likely be granted access to A3. Based on your AF/A1/A2 so far, ' + routeLabel + ' needs the lower A3 of the two routes — about ' + best.regulationValidRequiredA3 + '% to reach 50%. See the A3 Recovery Calculator below for Distinction too.',
+        'warn');
+    }
+    return box('Likely need A3',
+      'You’re below the 50% pass mark after A2 — you’ll likely be granted access to A3, but which route (FM2 vs FM3) suits you best can’t be computed yet. See the A3 Recovery Calculator below.',
+      'warn');
+  }
+  return '';
+}
+
 function marksIntelligenceCardHtml_(mi) {
   if (mi.status !== 'ok') {
     return '<div style="background:#FDF6F0;border:1px solid #F0DCC8;border-radius:14px;padding:16px 18px;">' +
@@ -3392,6 +3446,7 @@ function marksIntelligenceCardHtml_(mi) {
     '<div><div style="font-size:10.5px;color:#8A7A68;">Recovery</div><div style="margin-top:2px;">' + miBadgeHtml_(mi.recoveryDifficulty, mi.recoveryDifficulty) + '</div></div>' +
     (mi.riskAnalysis ? '<div><div style="font-size:10.5px;color:#8A7A68;">Marks Risk Analysis</div><div style="margin-top:2px;">' + miBadgeHtml_(mi.riskAnalysis.level, mi.riskAnalysis.level) + '</div></div>' : '') +
     '</div>' +
+    likelyPathHtml_(mi) +
     reasonsListHtml_(mi.reasons) +
     (mi.riskAnalysis ? reasonsListHtml_(mi.riskAnalysis.reasons) : '') +
     a2InferencePanelHtml_(mi.inferredA2) +
