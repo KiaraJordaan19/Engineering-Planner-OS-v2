@@ -133,7 +133,7 @@ function runConfirmedWeightingsV148Migration() {
   });
 
   report.push('');
-  report.push('Applied Mathematics B154 now has a verified A3 weight (0.5) — its Required A3 Calculator can compute targets. Electrotechnique 143, Computer Programming 143, Engineering Mathematics 145 and Strength of Materials 143 do NOT have a confirmed A3 weight anywhere in the uploaded module frameworks — their Required A3 Calculators stay unavailable ("A3 rules incomplete") until a real number is found for them.');
+  report.push('A3 weight update (v1.4.9, API.js): the Faculty Assessment Rules document section 4.2.1.7 ("WA3 = WA2") means A3 weight is now DERIVED from A2 weight automatically for every module with a complete AF/A1/A2 baseline -- "A3 weight (%) (verified)" is an optional override, not a requirement. Applied Mathematics B154 has that override set explicitly above (0.5, same as its A2 weight, so no practical difference); Electrotechnique 143, Computer Programming 143, Engineering Mathematics 145 and Strength of Materials 143 all now get A3 = their own A2 weight automatically, with no column to fill in.');
   report.push('Applied Mathematics B154: remember the "drop lowest 2" rule becomes "drop lowest 3" for a student who also writes the optional Week-1 revision test — not implemented, flag to Claude if relevant.');
   report.push('Safe to run again at any time.');
   migrationReport_('Confirmed weightings v1.4.8 migration', report);

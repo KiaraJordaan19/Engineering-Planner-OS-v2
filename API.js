@@ -4063,14 +4063,21 @@ var RECALC_MATCH_TOLERANCE_PCT = 0.15;
  * additive: FM1 = AF+A1+A2 (which is why every confirmed module's AF+A1+A2
  * already sums to 100 -- FM1 genuinely has no A3 component), FM2 = AF+A1+A3,
  * FM3 = AF+A2+A3, each combination renormalized to its own included weights.
- * A3's weight is therefore a GENUINELY SEPARATE, independently-verified
- * number (04 Module Rules: "A3 weight (%) (verified)") -- NEVER derived as a
- * remainder, NEVER assumed equal to A2's weight, NEVER split evenly across
- * whichever components are in play. Returns
- * { complete, af, a1, a2, a3, a3Verified, reason }, where `complete` covers
- * only the AF/A1/A2 baseline (sufficient for FM1); `a3Verified` is checked
- * separately since a module can have a complete FM1 baseline while its A3
- * weight remains unconfirmed (FM2/FM3 simply aren't computed until then).
+ *
+ * v1.4.9 CORRECTION: A3's weight is NOT independent after all. The Faculty
+ * of Engineering Assessment Rules document, section 4.2.1.7 ("Limits to
+ * weightings in final mark formulae", for semester modules with a major
+ * final written/invigilated assessment -- i.e. every standard A1/A2/A3
+ * module), states plainly: "WA3 = WA2". This is a binding Faculty-wide
+ * rule, not a per-module coincidence -- confirmed independently by Applied
+ * Mathematics B154's own module framework, which states "wA3 = wA2 = 0.5"
+ * for exactly that reason. So A3's weight is DERIVED from A2's weight by
+ * default now, for every module with a complete AF/A1/A2 baseline -- the
+ * "A3 weight (%) (verified)" column becomes an OVERRIDE for the rare module
+ * with an approved deviation recorded in the Faculty document's Appendix B
+ * (none of this user's 6 modules currently have one), not a requirement.
+ * Returns { complete, af, a1, a2, a3, a3Verified, a3Source, reason }, where
+ * `complete` covers only the AF/A1/A2 baseline (sufficient for FM1).
  */
 function mi_getModuleWeights_(m) {
   if (!m || m.ruleStatus !== "Verified") {
@@ -4079,11 +4086,12 @@ function mi_getModuleWeights_(m) {
   if (typeof m.afWeight !== "number" || typeof m.a1Weight !== "number" || typeof m.a2Weight !== "number") {
     return { complete: false, a3Verified: false, reason: "AF/A1/A2 weighting is not fully configured in 04 Module Rules for " + m.name + "." };
   }
-  var a3Verified = typeof m.a3Weight === "number";
+  var hasOverride = typeof m.a3Weight === "number";
+  var a3Value = hasOverride ? m.a3Weight : m.a2Weight;
+  var a3Source = hasOverride ? "override" : "derived (Faculty Assessment Rules 4.2.1.7: WA3 = WA2)";
   return {
     complete: true, af: m.afWeight, a1: m.a1Weight, a2: m.a2Weight,
-    a3: a3Verified ? m.a3Weight : null, a3Verified: a3Verified,
-    reason: a3Verified ? null : ("A3's own weight is not yet verified for " + m.name + " in 04 Module Rules (\"A3 weight (%) (verified)\") -- FM2/FM3 and any A3-based calculation are unavailable until it is entered; never assumed equal to A2's weight or split evenly.")
+    a3: a3Value, a3Verified: true, a3Source: a3Source, reason: null
   };
 }
 
@@ -4911,7 +4919,7 @@ function mi_computeMarksIntelligence_(module, marksRow, passMark, distinctionMar
 
   var reasons = [];
   if (a2Source === "estimated") reasons.push("A2 is not yet published for this module -- Estimated A2 (" + a2Value + "%, confidence " + inferredA2.confidence + ") was used. See the A2 inference panel for the full calculation.");
-  if (!weights.a3Verified) reasons.push("A3 rules incomplete -- required-A3 and FM2/FM3 calculations unavailable.");
+  if (weights.a3Source === "derived (Faculty Assessment Rules 4.2.1.7: WA3 = WA2)") reasons.push("A3 weight (" + weights.a3 + "%) is derived from A2's weight per Faculty Assessment Rules 4.2.1.7 (\"WA3 = WA2\") -- no separate A3 weight is on file for this module. Enter one in \"A3 weight (%) (verified)\" only if this module has an approved deviation.");
 
   var mtd = mi_computeMtd_(weights, af, a1, a1Status);
   reasons.push(mtd.reasons[0]);
